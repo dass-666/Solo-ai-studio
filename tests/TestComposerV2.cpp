@@ -56,7 +56,8 @@ TEST (v2_musical_invariants_all_styles)
                 {
                     auto p = v2Params (pr.key, pr.prog, 66.0 + (i * 17) % 110);
                     p.timeSignature = { (i % 3 == 0) ? 3 : 4, 4 };
-                    p.bars = (int[]) { 2, 4, 8, 16 }[i % 4];
+                    static const int kBarsOpts[] = { 2, 4, 8, 16 };
+                    p.bars = kBarsOpts[i % 4];
                     p.instrument = (InstrumentId) ins;
                     p.style = (Style) st;
                     p.energy = (i % 5) / 4.0;

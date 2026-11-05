@@ -81,6 +81,7 @@ bool FxSettings::operator== (const FxSettings& o) const
 }
 
 // ---------------------------------------------------------------- presets
+// Niveles de salida calibrados para ~-18 LUFS (medidos con tools/solo_cli calibrate sobre 9 solos de guitarra/sinte).
 const std::vector<FxPreset>& fxPresets()
 {
     static const std::vector<FxPreset> presets = [] {
@@ -91,7 +92,7 @@ const std::vector<FxPreset>& fxPresets()
             on (s, { FxStage::Amp, FxStage::Cabinet, FxStage::Eq, FxStage::Chorus, FxStage::Reverb });
             s.ampGain = 0.12f; s.ampMaster = 0.2f; s.ampTrebleDb = 2; s.cabType = 0;
             s.eqHighDb = 1.5f; s.chorusMix = 0.2f; s.chorusDepth = 0.3f; s.reverbMix = 0.15f; s.reverbSize = 0.5f;
-            s.outputDb = 2.0f;
+            s.outputDb = -10.6f;
             v.push_back ({ "Clean Guitar", s });
         }
         {
@@ -99,7 +100,7 @@ const std::vector<FxPreset>& fxPresets()
             on (s, { FxStage::Overdrive, FxStage::Amp, FxStage::Cabinet, FxStage::Eq, FxStage::Delay, FxStage::Reverb });
             s.odDrive = 0.45f; s.odTone = 0.45f; s.ampGain = 0.35f; s.ampMidDb = 2; s.cabType = 1;
             s.eqLowDb = -2; s.delayBeats = 0.75f; s.delayFeedback = 0.38f; s.delayMix = 0.22f; s.delayToneHz = 3500;
-            s.reverbMix = 0.25f; s.reverbSize = 0.7f; s.outputDb = -3.0f;
+            s.reverbMix = 0.25f; s.reverbSize = 0.7f; s.outputDb = -16.6f;
             v.push_back ({ "Emotional Lead", s });
         }
         {
@@ -107,7 +108,7 @@ const std::vector<FxPreset>& fxPresets()
             on (s, { FxStage::Overdrive, FxStage::Amp, FxStage::Cabinet, FxStage::Eq, FxStage::Delay, FxStage::Reverb });
             s.odDrive = 0.6f; s.odTone = 0.55f; s.ampGain = 0.6f; s.ampMidDb = 3; s.ampTrebleDb = 1; s.ampMaster = 0.6f;
             s.cabType = 2; s.delayBeats = 0.5f; s.delayFeedback = 0.25f; s.delayMix = 0.14f; s.reverbMix = 0.14f;
-            s.reverbSize = 0.5f; s.outputDb = -5.0f;
+            s.reverbSize = 0.5f; s.outputDb = -12.6f;
             v.push_back ({ "Classic Rock Lead", s });
         }
         {
@@ -115,7 +116,7 @@ const std::vector<FxPreset>& fxPresets()
             on (s, { FxStage::Overdrive, FxStage::Amp, FxStage::Cabinet, FxStage::Eq, FxStage::Reverb });
             s.odDrive = 0.35f; s.odTone = 0.4f; s.ampGain = 0.45f; s.ampBassDb = 1; s.ampMidDb = 2; s.ampTrebleDb = -1;
             s.ampMaster = 0.55f; s.cabType = 1; s.reverbMix = 0.18f; s.reverbSize = 0.45f; s.reverbDamping = 0.6f;
-            s.outputDb = -3.0f;
+            s.outputDb = -14.2f;
             v.push_back ({ "Blues Lead", s });
         }
         {
@@ -124,7 +125,7 @@ const std::vector<FxPreset>& fxPresets()
             s.odDrive = 0.2f; s.odTone = 0.6f; s.distGain = 0.7f; s.distTone = 0.55f; s.ampGain = 0.5f;
             s.ampBassDb = 2; s.ampMidDb = -1; s.ampTrebleDb = 2; s.ampMaster = 0.7f; s.cabType = 2;
             s.eqLowDb = -3; s.eqMidDb = 2; s.eqMidHz = 1200; s.delayBeats = 0.75f; s.delayFeedback = 0.3f;
-            s.delayMix = 0.16f; s.reverbMix = 0.15f; s.outputDb = -7.0f;
+            s.delayMix = 0.16f; s.reverbMix = 0.15f; s.outputDb = -14.8f;
             v.push_back ({ "High Gain Solo", s });
         }
         {
@@ -133,7 +134,7 @@ const std::vector<FxPreset>& fxPresets()
             s.ampGain = 0.15f; s.ampMaster = 0.25f; s.cabType = 0; s.eqHighDb = -2; s.filterCutoffHz = 5000;
             s.chorusMix = 0.35f; s.chorusDepth = 0.5f; s.chorusRateHz = 0.3f;
             s.delayBeats = 1.5f; s.delayFeedback = 0.55f; s.delayMix = 0.35f; s.delayToneHz = 2500;
-            s.reverbMix = 0.45f; s.reverbSize = 0.92f; s.reverbDamping = 0.3f; s.outputDb = 0.0f;
+            s.reverbMix = 0.45f; s.reverbSize = 0.92f; s.reverbDamping = 0.3f; s.outputDb = -14.0f;
             v.push_back ({ "Ambient Guitar", s });
         }
         {
@@ -141,7 +142,7 @@ const std::vector<FxPreset>& fxPresets()
             on (s, { FxStage::Overdrive, FxStage::Amp, FxStage::Cabinet, FxStage::Eq, FxStage::Delay, FxStage::Reverb });
             s.odDrive = 0.3f; s.ampGain = 0.3f; s.ampMidDb = 1; s.cabType = 1; s.eqLowDb = -1; s.eqHighDb = 1;
             s.delayBeats = 1.0f; s.delayFeedback = 0.42f; s.delayMix = 0.25f; s.delayToneHz = 3000;
-            s.reverbMix = 0.38f; s.reverbSize = 0.88f; s.reverbDamping = 0.35f; s.outputDb = -2.0f;
+            s.reverbMix = 0.38f; s.reverbSize = 0.88f; s.reverbDamping = 0.35f; s.outputDb = -18.8f;
             v.push_back ({ "Cinematic Lead", s });
         }
         {
@@ -150,7 +151,7 @@ const std::vector<FxPreset>& fxPresets()
             s.eqLowDb = -2; s.eqHighDb = 1; s.filterCutoffHz = 6000; s.filterResonance = 0.25f;
             s.chorusMix = 0.5f; s.chorusDepth = 0.6f; s.chorusRateHz = 0.8f;
             s.delayBeats = 0.75f; s.delayFeedback = 0.35f; s.delayMix = 0.22f; s.reverbMix = 0.25f;
-            s.reverbSize = 0.7f; s.reverbWidth = 1.0f; s.outputDb = 0.0f;
+            s.reverbSize = 0.7f; s.reverbWidth = 1.0f; s.outputDb = 2.9f;
             v.push_back ({ "Wide Synth Lead", s });
         }
         return v;
@@ -405,7 +406,8 @@ float EffectsChain::overdrive (float x, float drive)
     const float g = 1.0f + drive * drive * 60.0f;
     const float a = upLp2.process (upLp1.process (2.0f * in));
     const float b = upLp2.process (upLp1.process (0.0f));
-    auto shape = [g] (float v) { const float y = v * g; return std::tanh (y + 0.12f) - 0.1194f; };
+    // Asimetría (armónicos pares) sin desplazamiento de continua: f(0) = 0 exacto.
+    auto shape = [g] (float v) { const float y = v * g; return y >= 0.0f ? std::tanh (y) : 1.25f * std::tanh (0.8f * y); };
     const float ya = downLp2.process (downLp1.process (shape (a)));
     downLp2.process (downLp1.process (shape (b)));
     return odTone.process (ya) * 0.7f;
@@ -423,8 +425,10 @@ float EffectsChain::distortion (float x, float gain)
 }
 
 void EffectsChain::process (float* left, float* right, int numSamples, const FxSettings& st, double bpm,
-                            const float* autoValues, float autoSmoothingMs)
+                            const float* autoValues, float autoSmoothingMs, double soloTimeSec)
 {
+    if (soloTimeSec >= 0.0)
+        chorusPhase = std::fmod (2.0 * dsp::kPi * st.chorusRateHz * soloTimeSec, 2.0 * dsp::kPi);
     if (! prepared || numSamples <= 0) return;
     // Coeficientes de filtros: solo se recalculan si cambian los parámetros que los definen.
     const bool filtersChanged = ! haveLast || differs (st.odTone, last.odTone) || differs (st.distTone, last.distTone)

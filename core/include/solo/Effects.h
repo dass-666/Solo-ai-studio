@@ -104,8 +104,10 @@ public:
 
     // Tiempo real. 'settings' se lee una vez por bloque; 'autoValues[t]' >= 0 sustituye al parámetro t
     // (valor normalizado), < 0 = sin automatización. 'bpm' sincroniza el delay.
+    // 'soloTimeSec' >= 0: posición dentro del solo (segundos) al inicio del bloque; sincroniza el LFO del
+    // chorus con el solo para que la exportación y la reproducción en vivo coincidan. < 0: LFO libre.
     void process (float* left, float* right, int numSamples, const FxSettings& settings, double bpm,
-                  const float* autoValues = nullptr, float autoSmoothingMs = 30.0f);
+                  const float* autoValues = nullptr, float autoSmoothingMs = 30.0f, double soloTimeSec = -1.0);
 
     // Segundos aproximados hasta que la cola (delay + reverb) cae por debajo de -60 dB.
     static double tailSeconds (const FxSettings& s, double bpm);

@@ -92,16 +92,20 @@ int SoloPlayer::process (const TransportState& t, double sampleRate, int numSamp
     if (t1 <= 0.0 || L <= 0) return n;
 
     const auto& ev = data->events;
+    // Tolerancia de 1e-6 muestras: un evento que cae (por redondeo de coma flotante) justo en el borde
+    // entre dos bloques se asigna siempre igual, sea cual sea el tamaño de bloque. Así la exportación
+    // offline y la reproducción en vivo colocan cada nota en la misma muestra.
+    const double epsT = 1.0e-6 * ticksPerSample;
     auto emitRange = [&] (int64_t cycleBase, double segA, double segB, bool includeEnd) {
         // Eventos con tick local en [ceil(segA), segB) (o hasta L inclusive al cerrar ciclo).
-        const int64_t a = (int64_t) std::ceil (segA - (double) cycleBase - 1e-9);
+        const int64_t a = (int64_t) std::ceil (segA - (double) cycleBase - epsT);
         auto it = std::lower_bound (ev.begin(), ev.end(), a, [] (const MidiEvent& e, int64_t v) { return e.tick < v; });
         for (; it != ev.end(); ++it)
         {
             const double global = (double) (it->tick + cycleBase);
-            const bool inside = includeEnd ? it->tick <= L && global < segB + 1e-9 : global < segB;
+            const bool inside = includeEnd ? it->tick <= L && global < segB + 1e-9 : global + epsT < segB;
             if (! inside) break;
-            int offset = (int) std::floor ((global - t0) / ticksPerSample);
+            int offset = (int) std::floor ((global - t0) / ticksPerSample + 1.0e-6);
             offset = std::clamp (offset, 0, numSamples - 1);
             auto& act = active[it->pitch];
             if (it->type == EventType::NoteOn)

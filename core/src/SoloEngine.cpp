@@ -131,7 +131,8 @@ SoloEngine::BlockResult SoloEngine::process (float* left, float* right, int n, c
         autoHoldValid = true;
     }
 
-    if (fxs) fx.process (left, right, n, *fxs, bpm, anyAuto ? autoHold.data() : nullptr, smoothingMs);
+    const double soloTimeSec = localTick >= 0 ? localTick / kPPQ * 60.0 / (t.bpm > 0 ? t.bpm : bpm) : -1.0;
+    if (fxs) fx.process (left, right, n, *fxs, bpm, anyAuto ? autoHold.data() : nullptr, smoothingMs, soloTimeSec);
 
     // Volumen general (parámetro del host), suavizado.
     gainSmoothed.setTarget (outputGain.load(), (int) (0.02 * sampleRate));
