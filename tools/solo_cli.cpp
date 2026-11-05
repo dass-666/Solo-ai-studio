@@ -278,7 +278,7 @@ int cmdBench()
     p.seed = 1;
     const auto s = SoloComposer::compose (p);
     std::printf ("Solo de prueba: %zu notas (rock virtuoso, 140 BPM). Bloques de 256 muestras a 48 kHz, 60 s de audio.\n", s.notes.size());
-    std::printf ("%-20s %12s %14s %14s\n", "Preset", "CPU media %", "bloque peor %", "x tiempo real");
+    std::printf ("%-20s %10s %9s %9s %10s %8s %10s\n", "Preset", "media %", "p99 %", "p99.9 %", "peor %", "(bloque)", "x t.real");
     const long rss0 = peakRssKb();
     std::vector<std::pair<std::string, FxSettings>> sets { { "Sin efectos", FxSettings {} } };
     for (const auto& pr : fxPresets()) sets.push_back ({ pr.name, pr.settings });
@@ -294,6 +294,8 @@ int cmdBench()
         t.valid = true; t.playing = true; t.bpm = 140;
         const int blocks = 60 * 48000 / 256;
         double total = 0, worst = 0;
+        int worstBlock = 0;
+        std::vector<double> times ((size_t) blocks);
         for (int b = 0; b < blocks; ++b)
         {
             t.ppqPosition = b * 256.0 * 140.0 / 60.0 / 48000.0;
@@ -301,10 +303,14 @@ int cmdBench()
             e.process (L.data(), R.data(), 256, t);
             const double us = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now() - t0).count();
             total += us;
-            worst = std::max (worst, us);
+            times[(size_t) b] = us;
+            if (us > worst) { worst = us; worstBlock = b; }
         }
+        std::sort (times.begin(), times.end());
+        auto pct = [&] (double q) { return times[(size_t) std::min ((double) blocks - 1, q * blocks)]; };
         const double blockUs = 256.0 / 48000.0 * 1e6;
-        std::printf ("%-20s %11.2f%% %13.1f%% %13.0fx\n", name.c_str(), 100.0 * total / blocks / blockUs, 100.0 * worst / blockUs,
+        std::printf ("%-20s %9.2f%% %8.1f%% %8.1f%% %9.1f%% %8d %9.0fx\n", name.c_str(), 100.0 * total / blocks / blockUs,
+                     100.0 * pct (0.99) / blockUs, 100.0 * pct (0.999) / blockUs, 100.0 * worst / blockUs, worstBlock,
                      blocks * blockUs / total);
     }
     std::printf ("Memoria: tamaño de SoloEngine %zu bytes + buffers (delay 4 s estéreo, reverb, chorus, cuerdas)\n", sizeof (SoloEngine));

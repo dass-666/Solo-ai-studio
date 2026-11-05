@@ -11,6 +11,7 @@
 #include "solo/StateManager.h"
 
 #include <algorithm>
+#include <limits>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
@@ -450,6 +451,25 @@ TEST (default_state_fx_match_named_preset)
     CHECK (i >= 0);
     CHECK (st.settings.fxEnabled);
     CHECK (i >= 0 && st.fx == fxPresets()[(size_t) i].settings);
+}
+
+// Defecto encontrado al investigar picos de CPU: las colas de reverb/delay/filtros generaban números
+// desnormalizados en el estado interno (p99 de CPU por bloque ~24% frente a 1.7%). SoloEngine::process usa
+// dsp::ScopedFlushDenormals; aquí se comprueba que el guardián realmente anula los subnormales y restaura
+// el estado anterior. El efecto en CPU se mide con `solo_cli bench` (no se usa tiempo en pruebas: sería inestable).
+TEST (flush_denormals_guard_works)
+{
+    volatile float tiny = std::numeric_limits<float>::min(); // menor normal
+    volatile float half = 0.5f;
+    const float before = tiny * half;
+    CHECK (std::fpclassify (before) == FP_SUBNORMAL); // sin guardián: subnormal
+    {
+        const dsp::ScopedFlushDenormals g;
+        const float inside = tiny * half;
+        CHECK (inside == 0.0f);
+    }
+    const float after = tiny * half;
+    CHECK (std::fpclassify (after) == FP_SUBNORMAL); // estado restaurado
 }
 
 // ============================================================ estado v2

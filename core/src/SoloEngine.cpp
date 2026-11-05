@@ -48,6 +48,7 @@ SoloEngine::BlockResult SoloEngine::process (float* left, float* right, int n, c
 {
     BlockResult res;
     if (left == nullptr || n <= 0) return res;
+    const dsp::ScopedFlushDenormals noDenormals;
     std::fill (left, left + n, 0.0f);
     if (right != left && right != nullptr) std::fill (right, right + n, 0.0f);
     if (right == nullptr) right = left;
