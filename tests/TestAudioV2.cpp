@@ -10,6 +10,7 @@
 #include "solo/SoloEngine.h"
 #include "solo/StateManager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
@@ -438,6 +439,17 @@ TEST (midi_reader_rejects_bad_timesig_and_tempo)
     CHECK (std::isfinite (pm.bpm) && pm.bpm == 0.0);   // 0 = "no especificado": el tempo inválido se ignora
     CHECK (pm.tsDenominator == 0);                      // 0 = "no especificado": el compás inválido se ignora
     CHECK (pm.notes.size() == 1);
+}
+
+// Defecto encontrado en la revisión visual: un proyecto nuevo mostraba "Emotional Lead" activo pero sus
+// efectos eran los de fábrica (sin etapas): la interfaz y el sonido no coincidían.
+TEST (default_state_fx_match_named_preset)
+{
+    SoloState st;
+    const int i = fxPresetIndex (st.settings.fxPreset);
+    CHECK (i >= 0);
+    CHECK (st.settings.fxEnabled);
+    CHECK (i >= 0 && st.fx == fxPresets()[(size_t) i].settings);
 }
 
 // ============================================================ estado v2

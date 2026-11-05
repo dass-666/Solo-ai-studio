@@ -27,6 +27,7 @@ struct SoloSettings
     bool loop = true;
     double outputGain = 1.0;
     bool proMode = false;
+    int proTab = 0;                 // última pestaña Pro abierta (solo interfaz)
     int wavSampleRate = 48000;
     int midiFormat = 1;
     bool midiPitchBend = true; // exportar bends/vibrato/slides como pitch bend
@@ -49,6 +50,7 @@ struct SoloSettings
 struct SoloState
 {
     static constexpr int kVersion = 2;
+    SoloState(); // los efectos iniciales coinciden con el preset nombrado en settings.fxPreset
     SoloSettings settings;
     VariationHistory history;
     FxSettings fx;

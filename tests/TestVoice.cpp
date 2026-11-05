@@ -3,6 +3,7 @@
 #include "solo/AudioRenderer.h"
 #include "solo/VoiceAnalysis.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 

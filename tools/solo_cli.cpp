@@ -16,6 +16,7 @@
 #include "solo/StateManager.h"
 #include "solo/VoiceAnalysis.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

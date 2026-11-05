@@ -352,19 +352,7 @@ OpResult ProjectController::adjustFx (AutoTarget t, double delta)
 {
     FxSettings fx = state.fx;
     const float v = (float) std::clamp ((double) paramToAuto (t, fx) + delta, 0.0, 1.0);
-    const float p = autoToParam (t, v);
-    switch (t)
-    {
-        case AutoTarget::Drive:
-            if (fx.isOn (FxStage::Distortion)) fx.distGain = p;
-            else { fx.odDrive = p; fx.setOn (FxStage::Overdrive, true); }
-            break;
-        case AutoTarget::DelayMix: fx.delayMix = p; fx.setOn (FxStage::Delay, true); break;
-        case AutoTarget::ReverbMix: fx.reverbMix = p; fx.setOn (FxStage::Reverb, true); break;
-        case AutoTarget::FilterCutoff: fx.filterCutoffHz = p; fx.setOn (FxStage::Filter, true); break;
-        case AutoTarget::Volume: fx.outputDb = p; break;
-        case AutoTarget::ChorusMix: fx.chorusMix = p; fx.setOn (FxStage::Chorus, true); break;
-    }
+    setAutoParam (fx, t, v);
     auto r = setFx (fx, std::string (delta > 0 ? "Más " : "Menos ") + autoTargetName (t));
     r.message += " (" + std::to_string ((int) std::lround (v * 100)) + "%)";
     return r;

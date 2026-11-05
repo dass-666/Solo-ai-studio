@@ -63,6 +63,7 @@ void writeSettings (std::ostringstream& o, const SoloSettings& s)
     o << "loop=" << (s.loop ? 1 : 0) << "\n";
     o << "outputGain=" << fmt (s.outputGain) << "\n";
     o << "proMode=" << (s.proMode ? 1 : 0) << "\n";
+    o << "proTab=" << s.proTab << "\n";
     o << "wavSampleRate=" << s.wavSampleRate << "\n";
     o << "midiFormat=" << s.midiFormat << "\n";
     o << "midiPitchBend=" << (s.midiPitchBend ? 1 : 0) << "\n";
@@ -119,6 +120,7 @@ bool applySetting (SoloSettings& s, const std::string& k, const std::string& v, 
     else if (k == "loop") { if (! integer (0, 1)) return false; s.loop = i == 1; }
     else if (k == "outputGain") { if (! num()) return false; s.outputGain = std::clamp (d, 0.0, 2.0); }
     else if (k == "proMode") { if (! integer (0, 1)) return false; s.proMode = i == 1; }
+    else if (k == "proTab") { if (! integer (0, 15)) return false; s.proTab = (int) i; }
     else if (k == "wavSampleRate") { if (! integer (8000, 192000)) return false; s.wavSampleRate = (int) i; }
     else if (k == "midiFormat") { if (! integer (0, 1)) return false; s.midiFormat = (int) i; }
     else if (k == "midiPitchBend") { if (! integer (0, 1)) return false; s.midiPitchBend = i == 1; }
@@ -226,6 +228,12 @@ bool SoloSettings::toComposerParams (double bpm, ComposerParams& p, std::string&
     const auto errs = SoloComposer::validate (p);
     if (! errs.empty()) { error = errs.front(); return false; }
     return true;
+}
+
+SoloState::SoloState()
+{
+    const int i = fxPresetIndex (settings.fxPreset);
+    if (i >= 0) fx = fxPresets()[(size_t) i].settings;
 }
 
 std::string serializeState (const SoloState& s)

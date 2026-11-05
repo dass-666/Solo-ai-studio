@@ -1,6 +1,7 @@
 #pragma once
 #include "PianoRoll.h"
 #include "PluginProcessor.h"
+#include "ProPanels.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class SoloLookAndFeel : public juce::LookAndFeel_V4
@@ -34,8 +35,16 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
 
 private:
+    struct LayoutBox : juce::Component
+    {
+        std::function<void()> layout;
+        void resized() override { if (layout) layout(); }
+    };
+    void layoutGeneration();
+    void refreshPanels();
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
@@ -51,7 +60,6 @@ private:
     void onExportWav();
     void onSavePreset();
     void onLoadPreset();
-    void onRegenerateRange();
 
     juce::File defaultExportFolder() const;
 
@@ -64,6 +72,7 @@ private:
     // Cabecera
     juce::Label title, hostLabel, statusLabel;
     juce::TextButton easyButton { juce::String::fromUTF8 ("Fácil") }, proButton { "Pro" };
+    juce::TextButton undoButton { "Deshacer" }, redoButton { "Rehacer" };
 
     // Modo fácil
     juce::Label keyLabel, progLabel, instLabel, styleLabel, barsLabel, tsLabel, energyLabel, densityLabel;
@@ -73,6 +82,8 @@ private:
     juce::TextButton generateButton { "GENERAR" }, playButton { "ESCUCHAR" };
     juce::TextButton prevButton { "<" }, nextButton { ">" };
     juce::Label variationLabel;
+    juce::TextButton favButton { juce::String::fromUTF8 ("☆") };
+    juce::TextButton voiceButton { "TARAREAR / IMPORTAR VOZ" };
     juce::TextButton exportMidiButton { "Exportar MIDI" }, exportWavButton { "Exportar WAV" };
     DragMidiArea dragArea;
 
@@ -82,12 +93,25 @@ private:
     juce::ToggleButton lockSeedToggle { "Fijar semilla" };
     juce::Slider complexitySlider, bpmSlider, startBarSlider, velocitySlider;
     juce::ToggleButton hostTempoToggle { "BPM del DAW" }, syncToggle { "Sonar con el DAW" }, loopToggle { "Loop" };
-    juce::TextButton regenButton { "Regenerar compases" };
+    juce::ComboBox performerBox, engineBox;
+    juce::Label performerLabel;
+    juce::ToggleButton keepMotifsToggle { "Mantener motivos" }, pitchBendToggle { "MIDI con pitch bend" };
     juce::ComboBox presetBox, rateBox, fmtBox;
     juce::TextButton savePresetButton { "Guardar" }, loadPresetButton { "Cargar" };
     juce::TextButton zoomInButton { "+" }, zoomOutButton { "-" }, fitButton { "Ajustar" };
 
     PianoRoll pianoRoll;
+
+    // Pestañas Pro (deben declararse después de pianoRoll: el contexto lo usa)
+    PanelContext panelCtx;
+    LayoutBox genTab;
+    std::unique_ptr<NotesPanel> notesPanel;
+    std::unique_ptr<FxPanel> fxPanel;
+    std::unique_ptr<AutomationPanel> autoPanel;
+    std::unique_ptr<VoicePanel> voicePanel;
+    std::unique_ptr<HistoryPanel> historyPanel;
+    std::unique_ptr<CommandPanel> commandPanel;
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::ComponentBoundsConstrainer constrainer;
 

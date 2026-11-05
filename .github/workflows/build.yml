@@ -37,7 +37,7 @@ jobs:
       - name: Batería de ejemplos (MIDI + WAV)
         run: |
           mkdir examples-out
-          build/Release/solo_cli.exe examples examples-out
+          build/Release/solo_cli.exe demos examples-out
 
       - name: Empaquetar
         shell: pwsh
@@ -83,3 +83,20 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Host de prueba (con editor)
         run: xvfb-run -a build/plugin/SoloHostTest_artefacts/Release/SoloHostTest "build/plugin/SoloAIStudio_artefacts/Release/VST3/Solo AI Studio.vst3" --editor
+
+  sanitizers:
+    name: Linux (núcleo con ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configurar (sin plugin, con sanitizers)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOLO_BUILD_PLUGIN=OFF -DSOLO_SANITIZE=ON
+      - name: Compilar
+        run: cmake --build build
+      - name: Pruebas con sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./build/solo_tests

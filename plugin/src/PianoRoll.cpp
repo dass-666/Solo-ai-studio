@@ -1,4 +1,5 @@
 #include "PianoRoll.h"
+#include <algorithm>
 #include <cmath>
 
 using namespace solo;
@@ -13,6 +14,18 @@ bool isBlackKey (int pitch)
 {
     const int pc = pitch % 12;
     return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+}
+
+juce::String articulationMarks (const Note& n)
+{
+    juce::StringArray a;
+    const auto& e = n.expr;
+    if (e.bendType != BendType::None) a.add ("BU");
+    if (e.vibratoDepth > 0.0f) a.add ("~");
+    if (e.slideFrom != 0) a.add ("/");
+    if (e.legato) a.add ("L");
+    if (e.palmMute) a.add ("PM");
+    return a.joinIntoString (" ");
 }
 } // namespace
 
@@ -150,6 +163,15 @@ void PianoRoll::paint (juce::Graphics& g)
         g.fillRect (x0, 0.0f, x1 - x0, (float) h);
     }
 
+    // Compases bloqueados (no se regeneran)
+    for (int b = 0; b < (int) lockedBars.size() && b < seq.bars; ++b)
+    {
+        if (! lockedBars[(size_t) b]) continue;
+        const float x0 = tickToX ((double) b * barT), x1 = tickToX ((double) (b + 1) * barT);
+        g.setColour (juce::Colour (0x22ffc857));
+        g.fillRect (x0, (float) kHeaderHeight, x1 - x0, (float) (h - kHeaderHeight));
+    }
+
     // Rejilla de tiempo
     const int64_t total = seq.lengthTicks();
     const int sub = pixelsPerTick * kPPQ / 4 > 6 ? kPPQ / 4 : beatT;
@@ -172,6 +194,7 @@ void PianoRoll::paint (juce::Graphics& g)
         const bool inRange = rangeA >= 0 && b >= rangeA && b <= rangeB;
         g.setColour (inRange ? kAccent : kText);
         juce::String label = juce::String (b + 1);
+        if (b < (int) lockedBars.size() && lockedBars[(size_t) b]) label = juce::String::fromUTF8 ("🔒") + label;
         if (! progression.bars.empty()) label += "  " + juce::String (progression.chordAtBar (b).toString (preferFlats));
         g.drawText (label, (int) x + 4, 0, (int) (barT * pixelsPerTick) - 6, kHeaderHeight, juce::Justification::centredLeft, true);
     }
@@ -191,11 +214,24 @@ void PianoRoll::paint (juce::Graphics& g)
         // barra de velocity dentro de la nota
         g.setColour (juce::Colours::black.withAlpha (0.35f));
         g.fillRect (r.getX() + 1, r.getBottom() - 2, (r.getWidth() - 2) * v, 1.5f);
+        if (n.locked)
+        {
+            g.setColour (juce::Colour (0xffffc857));
+            g.drawRoundedRectangle (r.expanded (1.0f), 2.0f, 1.5f);
+        }
         if (noteHeight >= 12 && r.getWidth() > 26)
         {
             g.setColour (juce::Colours::black.withAlpha (0.8f));
             g.setFont (juce::FontOptions (10.0f));
             g.drawText (juce::String (midiNoteName (n.pitch)), r.reduced (3, 0), juce::Justification::centredLeft, false);
+        }
+        // Marcas de articulación encima de la nota (texto corto: BU bend, ~ vibrato, / slide, PM, L legato)
+        const juce::String art = articulationMarks (n);
+        if (art.isNotEmpty() && r.getY() > kHeaderHeight + 10)
+        {
+            g.setColour (kText.withAlpha (0.85f));
+            g.setFont (juce::FontOptions (9.5f));
+            g.drawText (art, (int) r.getX(), (int) r.getY() - 11, juce::jmax (40, (int) r.getWidth()), 10, juce::Justification::centredLeft, false);
         }
     }
 

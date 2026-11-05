@@ -19,6 +19,7 @@ public:
     const solo::Sequence& getSequence() const { return seq; }
     void setProgression (const solo::Progression& p, bool flats) { progression = p; preferFlats = flats; repaint(); }
     void setPlayheadTick (int64_t tick);
+    void setLockedBars (const std::vector<bool>& b) { lockedBars = b; repaint(); }
     void setEditable (bool e) { editable = e; }
 
     int getSelectedIndex() const { return selected; }
@@ -63,6 +64,7 @@ private:
     solo::Sequence seq;
     solo::Progression progression;
     bool preferFlats = false;
+    std::vector<bool> lockedBars;
     bool editable = true;
     int selected = -1;
     int64_t playhead = -1;

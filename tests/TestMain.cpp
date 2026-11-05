@@ -6,6 +6,7 @@
 #include "solo/SoloComposer.h"
 #include "solo/StateManager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>

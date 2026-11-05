@@ -296,6 +296,23 @@ float paramToAuto (AutoTarget t, const FxSettings& s)
     return 0.5f;
 }
 
+void setAutoParam (FxSettings& fx, AutoTarget t, float normalised)
+{
+    const float p = autoToParam (t, clampf (normalised, 0, 1));
+    switch (t)
+    {
+        case AutoTarget::Drive:
+            if (fx.isOn (FxStage::Distortion)) fx.distGain = p;
+            else { fx.odDrive = p; fx.setOn (FxStage::Overdrive, true); }
+            break;
+        case AutoTarget::DelayMix: fx.delayMix = p; fx.setOn (FxStage::Delay, true); break;
+        case AutoTarget::ReverbMix: fx.reverbMix = p; fx.setOn (FxStage::Reverb, true); break;
+        case AutoTarget::FilterCutoff: fx.filterCutoffHz = p; fx.setOn (FxStage::Filter, true); break;
+        case AutoTarget::Volume: fx.outputDb = p; break;
+        case AutoTarget::ChorusMix: fx.chorusMix = p; fx.setOn (FxStage::Chorus, true); break;
+    }
+}
+
 // ---------------------------------------------------------------- procesador
 void EffectsChain::prepare (double sampleRate, int)
 {

@@ -167,26 +167,46 @@ int main (int argc, char** argv)
                 check (inst->getTotalNumOutputChannels() == 2, "Instancia con salida estereo");
                 if (ed != nullptr && snapshot != juce::File())
                 {
-                    // Captura con un solo real generado por el núcleo (Am F C G, 146 BPM, 8 compases).
+                    // Capturas con un proyecto real generado por el núcleo (Am F C G, 146 BPM, 8 compases):
+                    // modo fácil y cada pestaña Pro. Nombre: <ruta>-facil.png, <ruta>-pro0.png ...
                     solo::SoloState st;
-                    st.settings.proMode = true;
                     solo::ComposerParams cp;
                     std::string err;
+                    st.settings.style = solo::Style::ExpressiveBlues;
                     st.settings.toComposerParams (146.0, cp, err);
                     for (uint64_t seed : { 1ull, 2ull, 3ull }) { cp.seed = seed; st.history.push (solo::SoloComposer::compose (cp), seed); }
-                    const auto text = solo::serializeState (st);
-                    juce::XmlElement xml ("VST3PluginState");
-                    juce::MemoryBlock raw (text.data(), text.size());
-                    xml.createNewChildElement ("IComponent")->addTextElement (raw.toBase64Encoding());
-                    juce::MemoryBlock wrapped;
-                    juce::AudioProcessor::copyXmlToBinary (xml, wrapped);
-                    inst->setStateInformation (wrapped.getData(), (int) wrapped.getSize());
-                    for (int k = 0; k < 20; ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-                    auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
-                    snapshot.deleteFile();
-                    juce::FileOutputStream os (snapshot);
-                    juce::PNGImageFormat png;
-                    check (png.writeImageToStream (img, os), "Captura del editor guardada");
+                    st.history.setFavorite (1, true);
+                    st.history.rename (1, "Mi favorita");
+                    st.slotA = st.history.all()[0].id;
+                    st.slotB = st.history.all()[2].id;
+                    st.lockedBars = { true, false, false, false, false, false, false, false };
+                    st.settings.fxEnabled = true;
+                    st.settings.fxPreset = "Blues Lead";
+                    st.fx = solo::fxPresets()[(size_t) solo::fxPresetIndex ("Blues Lead")].settings;
+                    auto& lane = st.automation.lane (solo::AutoTarget::DelayMix);
+                    lane.enabled = true;
+                    lane.points = { { 0, 0.2f }, { 4 * 4 * solo::kPPQ, 0.8f }, { 8 * 4 * solo::kPPQ, 0.4f } };
+                    st.dnaSummary = "ejemplo: 3 motivos, saltos medios, dirección ascendente";
+                    auto capture = [&] (bool pro, int tab, const juce::String& suffix) {
+                        st.settings.proMode = pro;
+                        st.settings.proTab = tab;
+                        const auto text = solo::serializeState (st);
+                        juce::XmlElement xml ("VST3PluginState");
+                        juce::MemoryBlock raw (text.data(), text.size());
+                        xml.createNewChildElement ("IComponent")->addTextElement (raw.toBase64Encoding());
+                        juce::MemoryBlock wrapped;
+                        juce::AudioProcessor::copyXmlToBinary (xml, wrapped);
+                        inst->setStateInformation (wrapped.getData(), (int) wrapped.getSize());
+                        for (int k = 0; k < 20; ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
+                        const auto f = snapshot.getSiblingFile (snapshot.getFileNameWithoutExtension() + suffix + ".png");
+                        f.deleteFile();
+                        juce::FileOutputStream os (f);
+                        juce::PNGImageFormat png;
+                        check (png.writeImageToStream (img, os), "Captura del editor guardada: " + f.getFileName());
+                    };
+                    capture (false, 0, "-facil");
+                    for (int t = 0; t < 7; ++t) capture (true, t, "-pro" + juce::String (t));
                 }
                 ed.reset();
             }

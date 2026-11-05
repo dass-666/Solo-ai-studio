@@ -75,12 +75,7 @@ struct Note
     int targetPitch() const
     {
         const int b = (int) std::lround (expr.bendSemitones);
-        switch (expr.bendType)
-        {
-            case BendType::Up:
-            case BendType::PreBend: return pitch + b;
-            default: return pitch;
-        }
+        return (expr.bendType == BendType::Up || expr.bendType == BendType::PreBend) ? pitch + b : pitch;
     }
     bool operator== (const Note& o) const
     {

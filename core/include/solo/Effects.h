@@ -91,6 +91,8 @@ struct AutomationLane
 // Convierte valor normalizado <-> valor real del parámetro.
 float autoToParam (AutoTarget t, float normalised);
 float paramToAuto (AutoTarget t, const FxSettings& s);
+// Fija el parámetro principal de un destino a partir de un valor normalizado y activa su etapa si estaba apagada.
+void setAutoParam (FxSettings& s, AutoTarget t, float normalised);
 
 // ---------------------------------------------------------------- procesador
 class EffectsChain
