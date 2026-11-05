@@ -31,7 +31,11 @@ add_library(solo_core STATIC
     core/src/Playback.cpp
     core/src/AudioRenderer.cpp
     core/src/StateManager.cpp
-    core/src/Analysis.cpp)
+    core/src/Analysis.cpp
+    core/src/VoiceAnalysis.cpp
+    core/src/CreativeDNA.cpp
+    core/src/Project.cpp
+    core/src/Commands.cpp)
 target_include_directories(solo_core PUBLIC core/include)
 if(MSVC)
     target_compile_options(solo_core PRIVATE /W4 /utf-8)
@@ -49,7 +53,7 @@ endif()
 
 if(SOLO_BUILD_TESTS)
     enable_testing()
-    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp)
+    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp)
     target_link_libraries(solo_tests PRIVATE solo_core)
     if(MSVC)
         target_compile_options(solo_tests PRIVATE /utf-8)
