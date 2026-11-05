@@ -4,6 +4,19 @@
 
 namespace solo
 {
+namespace
+{
+TimedEvent offEvent (int offset, uint8_t pitch)
+{
+    TimedEvent e;
+    e.sampleOffset = offset;
+    e.type = EventType::NoteOff;
+    e.pitch = pitch;
+    e.velocity = 0;
+    return e;
+}
+} // namespace
+
 std::unique_ptr<PlaybackData> makePlaybackData (const Sequence& seqIn, int64_t startOffsetTicks, bool loop)
 {
     Sequence seq = seqIn;
@@ -23,7 +36,7 @@ int SoloPlayer::flush (TimedEvent* out, int maxOut)
     {
         while (active[(size_t) p] > 0 && n < maxOut)
         {
-            out[n++] = { 0, EventType::NoteOff, (uint8_t) p, 0 };
+            out[n++] = offEvent (0, (uint8_t) p);
             --active[(size_t) p];
         }
     }
@@ -94,13 +107,20 @@ int SoloPlayer::process (const TransportState& t, double sampleRate, int numSamp
             if (it->type == EventType::NoteOn)
             {
                 if (n + 2 > maxOut) continue; // sin espacio: no iniciar notas (nunca perder note-off)
-                if (act > 0) { out[n++] = { offset, EventType::NoteOff, it->pitch, 0 }; --act; }
-                out[n++] = { offset, EventType::NoteOn, it->pitch, it->velocity };
+                if (act > 0) { out[n++] = offEvent (offset, it->pitch); --act; }
+                TimedEvent on;
+                on.sampleOffset = offset;
+                on.type = EventType::NoteOn;
+                on.pitch = it->pitch;
+                on.velocity = it->velocity;
+                on.lengthSamples = (int32_t) std::min (2.0e9, (double) it->lengthTicks / ticksPerSample);
+                on.expr = it->expr;
+                out[n++] = on;
                 ++act;
             }
             else if (act > 0 && n < maxOut)
             {
-                out[n++] = { offset, EventType::NoteOff, it->pitch, 0 };
+                out[n++] = offEvent (offset, it->pitch);
                 --act;
             }
         }

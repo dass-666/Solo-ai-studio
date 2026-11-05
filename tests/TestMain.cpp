@@ -19,20 +19,7 @@ using namespace solo;
 #define SOLO_GOLDEN_HASH 4560047695921077447ull
 #endif
 
-namespace
-{
-int g_failures = 0, g_checks = 0;
-std::vector<std::pair<std::string, std::function<void()>>>& registry()
-{
-    static std::vector<std::pair<std::string, std::function<void()>>> r;
-    return r;
-}
-struct Reg { Reg (const char* n, std::function<void()> f) { registry().push_back ({ n, std::move (f) }); } };
-} // namespace
-
-#define TEST(name) static void name(); static Reg reg_##name (#name, name); static void name()
-#define CHECK(cond) do { ++g_checks; if (! (cond)) { ++g_failures; std::printf ("  FALLO %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
-#define CHECK_MSG(cond, msg) do { ++g_checks; if (! (cond)) { ++g_failures; std::printf ("  FALLO %s:%d: %s (%s)\n", __FILE__, __LINE__, #cond, std::string (msg).c_str()); } } while (0)
+#include "TestFramework.h"
 
 static ComposerParams baseParams (const char* key = "Am", const char* prog = "Am F C G", double bpm = 146.0)
 {
@@ -42,6 +29,10 @@ static ComposerParams baseParams (const char* key = "Am", const char* prog = "Am
     CHECK (Progression::parse (prog, p.progression, err));
     p.bars = 8;
     p.bpm = bpm;
+    // Estas pruebas son la regresión de S0–S2: usan el motor 1 tal como estaba (estilo "Rock").
+    p.engine = 1;
+    p.legacyStyle = 1;
+    p.instrument = InstrumentId::GuitarLite;
     return p;
 }
 
@@ -182,8 +173,8 @@ static std::vector<Scenario> scenarios()
                                { "Dm", "Dm Gm A7 Dm" }, { "G", "G Em C D" }, { "E", "Emaj7 C#m7 F#m7 B7" } };
     int i = 0;
     for (auto& pr : progs)
-        for (int ins = 0; ins < kNumInstruments; ++ins)
-            for (int st = 0; st < kNumStyles; ++st)
+        for (int ins = 0; ins < 3; ++ins) // cobertura original de S0–S2 (ver legacy_composer_known_defects_report)
+            for (int st = 0; st < 4; ++st) // los 4 estilos del motor 1
             {
                 const int ts = (i % 3 == 0) ? 3 : 4;
                 const int bars = (int[]) { 2, 4, 8, 16 }[i % 4];
@@ -206,6 +197,7 @@ TEST (composer_musical_invariants)
             p.bars = sc.bars;
             p.instrument = sc.ins;
             p.style = sc.st;
+            p.legacyStyle = (int) sc.st;
             p.energy = sc.e; p.density = sc.d; p.complexity = sc.c;
             p.seed = seed;
             const auto s = SoloComposer::compose (p);
@@ -611,7 +603,7 @@ TEST (state_roundtrip)
     st.settings.progressionText = "F#m D A E";
     st.settings.bars = 16;
     st.settings.instrument = InstrumentId::Flute;
-    st.settings.style = Style::Blues;
+    st.settings.style = Style::ExpressiveBlues;
     st.settings.energy = 0.33;
     st.settings.seed = 18446744073709551615ull;
     st.settings.manualBpm = 146.5;
@@ -625,7 +617,7 @@ TEST (state_roundtrip)
     std::string err;
     CHECK_MSG (deserializeState (text, back, err), err);
     CHECK (back.settings.keyText == "F#m" && back.settings.progressionText == "F#m D A E");
-    CHECK (back.settings.bars == 16 && back.settings.instrument == InstrumentId::Flute && back.settings.style == Style::Blues);
+    CHECK (back.settings.bars == 16 && back.settings.instrument == InstrumentId::Flute && back.settings.style == Style::ExpressiveBlues);
     CHECK (std::abs (back.settings.energy - 0.33) < 1e-9 && back.settings.seed == 18446744073709551615ull);
     CHECK (back.settings.manualBpm == 146.5 && back.settings.startBar == 9 && back.settings.proMode);
     CHECK (back.history.size() == 3 && back.history.currentIndex() == 1);
@@ -645,7 +637,7 @@ TEST (state_rejects_corrupt_and_future)
     CHECK (! deserializeState (text.substr (0, text.size() / 2), out, err));
     CHECK (out.settings.keyText == "SENTINEL"); // sin aplicar a medias
     auto future = text;
-    future.replace (future.find (" 1\n"), 3, " 99\n");
+    future.replace (future.find (" 2\n"), 3, " 99\n");
     CHECK (! deserializeState (future, out, err));
     CHECK (! deserializeState ("basura", out, err));
     auto badNote = text;
@@ -686,15 +678,7 @@ TEST (variation_history)
     CHECK (h.canGoBack() && ! h.canGoForward());
 }
 
-int main()
+int main (int argc, char** argv)
 {
-    for (auto& [name, fn] : registry())
-    {
-        const int before = g_failures;
-        std::printf ("[ RUN  ] %s\n", name.c_str());
-        fn();
-        std::printf ("[ %s ] %s\n", g_failures == before ? " OK " : "FAIL", name.c_str());
-    }
-    std::printf ("\n%zu pruebas, %d comprobaciones, %d fallos\n", registry().size(), g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    return solo_test::runAll (argc, argv);
 }

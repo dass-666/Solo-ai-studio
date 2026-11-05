@@ -1,4 +1,5 @@
 #include "solo/AudioRenderer.h"
+#include "solo/SoloEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -7,39 +8,21 @@ namespace solo
 {
 RenderResult renderSequence (const Sequence& seq, const RenderOptions& opts)
 {
+    // Mismo motor que el plugin (SoloEngine), sin efectos: solo la etapa de salida.
+    EngineRenderOptions eo;
+    eo.sampleRate = opts.sampleRate;
+    eo.blockSize = opts.blockSize;
+    eo.instrument = opts.instrument;
+    eo.gain = opts.gain;
+    eo.extraTailSeconds = opts.tailSeconds;
+    const auto er = renderWithEngine (seq, eo);
     RenderResult r;
-    const double sr = opts.sampleRate;
-    const int block = std::max (16, opts.blockSize);
-    const double bpm = seq.bpm > 0 ? seq.bpm : 120.0;
-    const double seconds = (double) seq.lengthTicks() / kPPQ * 60.0 / bpm + opts.tailSeconds;
-    const int64_t total = (int64_t) std::ceil (seconds * sr);
-
-    InstrumentEngine engine;
-    engine.setInstrument (opts.instrument);
-    engine.setOutputGain (opts.gain);
-    engine.prepare (sr);
-
-    const auto data = makePlaybackData (seq, 0, false);
-    SoloPlayer player;
-    ManualClock clock;
-    clock.start();
-
-    r.left.assign ((size_t) total, 0.0f);
-    r.right.assign ((size_t) total, 0.0f);
-    std::vector<TimedEvent> events (4096);
-
-    for (int64_t pos = 0; pos < total; pos += block)
-    {
-        const int n = (int) std::min<int64_t> (block, total - pos);
-        const auto t = clock.next (bpm, n, sr);
-        const int count = player.process (t, sr, n, data.get(), events.data(), (int) events.size());
-        for (int i = 0; i < count; ++i)
-            (events[(size_t) i].type == EventType::NoteOn ? r.noteOnsRendered : r.noteOffsRendered)++;
-        engine.process (r.left.data() + pos, r.right.data() + pos, n, events.data(), count);
-    }
-    for (size_t i = 0; i < r.left.size(); ++i)
-        r.peak = std::max ({ r.peak, std::abs (r.left[i]), std::abs (r.right[i]) });
-    r.activeVoicesAtEnd = engine.activeVoiceCount();
+    r.left = std::move (er.left);
+    r.right = std::move (er.right);
+    r.noteOnsRendered = er.noteOns;
+    r.noteOffsRendered = er.noteOffs;
+    r.peak = er.peak;
+    r.activeVoicesAtEnd = er.activeVoicesAtEnd;
     return r;
 }
 

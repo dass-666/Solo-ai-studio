@@ -22,11 +22,16 @@ add_library(solo_core STATIC
     core/src/MusicTheory.cpp
     core/src/Sequence.cpp
     core/src/MidiFile.cpp
-    core/src/SoloComposer.cpp
+    core/src/LegacyComposer.cpp
+    core/src/ComposerV2.cpp
+    core/src/Performer.cpp
     core/src/InstrumentEngine.cpp
+    core/src/Effects.cpp
+    core/src/SoloEngine.cpp
     core/src/Playback.cpp
     core/src/AudioRenderer.cpp
-    core/src/StateManager.cpp)
+    core/src/StateManager.cpp
+    core/src/Analysis.cpp)
 target_include_directories(solo_core PUBLIC core/include)
 if(MSVC)
     target_compile_options(solo_core PRIVATE /W4 /utf-8)
@@ -36,7 +41,7 @@ endif()
 
 if(SOLO_BUILD_TESTS)
     enable_testing()
-    add_executable(solo_tests tests/TestMain.cpp)
+    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp)
     target_link_libraries(solo_tests PRIVATE solo_core)
     if(MSVC)
         target_compile_options(solo_tests PRIVATE /utf-8)

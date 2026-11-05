@@ -1,3 +1,5 @@
+// Compositor S0–S2 ("motor clásico"). Se conserva sin cambios de comportamiento para
+// comparaciones A/B y para reproducir semillas antiguas.
 #include "solo/SoloComposer.h"
 #include <algorithm>
 #include <cmath>
@@ -5,47 +7,9 @@
 
 namespace solo
 {
-const char* instrumentName (InstrumentId id)
-{
-    switch (id)
-    {
-        case InstrumentId::Guitar: return "Guitarra (sintetizada)";
-        case InstrumentId::Flute: return "Flauta (sintetizada)";
-        case InstrumentId::Synth: return "Sintetizador lead";
-    }
-    return "?";
-}
-
-const char* styleName (Style s)
-{
-    switch (s)
-    {
-        case Style::Melodic: return "Melódico";
-        case Style::Rock: return "Rock";
-        case Style::Blues: return "Blues";
-        case Style::Electronic: return "Electrónico";
-    }
-    return "?";
-}
-
-const InstrumentProfile& profileFor (InstrumentId id)
-{
-    // Rangos en notas MIDI (C4 = 60). Guitarra: E3..D6 escrito como suena en el
-    // registro de solo; flauta: C4..C7; sintetizador: amplio.
-    static const InstrumentProfile guitar { InstrumentId::Guitar, { 52, 86, 57, 81 }, 12, 0.92, 1.0, 4, 12.0, 0.18, 29 };
-    static const InstrumentProfile flute { InstrumentId::Flute, { 60, 96, 64, 91 }, 12, 0.95, 0.8, 2, 10.0, 0.14, 73 };
-    static const InstrumentProfile synth { InstrumentId::Synth, { 48, 96, 57, 86 }, 15, 0.85, 1.15, 4, 16.0, 0.22, 81 };
-    switch (id)
-    {
-        case InstrumentId::Flute: return flute;
-        case InstrumentId::Synth: return synth;
-        case InstrumentId::Guitar: break;
-    }
-    return guitar;
-}
-
 namespace
 {
+enum class LStyle { Melodic = 0, Rock = 1, Blues = 2, Electronic = 3 };
 int mod12 (int v) { return ((v % 12) + 12) % 12; }
 
 struct Cell
@@ -77,14 +41,14 @@ const std::vector<Cell>& cellLibrary()
     return cells;
 }
 
-double styleCellWeight (Style s, const Cell& c)
+double styleCellWeight (LStyle s, const Cell& c)
 {
     switch (s)
     {
-        case Style::Blues: return c.triplet ? 2.2 : (c.notesPerBeat >= 4.0 ? 0.4 : 1.0);
-        case Style::Rock: return c.triplet ? 0.4 : (c.parts.size() == 3 && ! c.triplet && c.beats == 2 ? 1.6 : 1.0);
-        case Style::Electronic: return c.triplet ? 0.1 : (c.notesPerBeat >= 2.0 ? 1.4 : 0.8);
-        case Style::Melodic: return c.triplet ? 0.5 : (c.notesPerBeat <= 2.0 ? 1.3 : 0.6);
+        case LStyle::Blues: return c.triplet ? 2.2 : (c.notesPerBeat >= 4.0 ? 0.4 : 1.0);
+        case LStyle::Rock: return c.triplet ? 0.4 : (c.parts.size() == 3 && ! c.triplet && c.beats == 2 ? 1.6 : 1.0);
+        case LStyle::Electronic: return c.triplet ? 0.1 : (c.notesPerBeat >= 2.0 ? 1.4 : 0.8);
+        case LStyle::Melodic: return c.triplet ? 0.5 : (c.notesPerBeat <= 2.0 ? 1.3 : 0.6);
     }
     return 1.0;
 }
@@ -108,8 +72,8 @@ struct PhrasePlan
 class Composer
 {
 public:
-    explicit Composer (const ComposerParams& p)
-        : params (p), profile (profileFor (p.instrument)), rng (p.seed),
+    Composer (const ComposerParams& p, LStyle st)
+        : params (p), lstyle (st), profile (profileFor (p.instrument)), rng (p.seed),
           beat (p.timeSignature.ticksPerBeat()), bar (p.timeSignature.ticksPerBar()),
           total ((int64_t) p.bars * bar)
     {
@@ -148,6 +112,7 @@ public:
 
 private:
     const ComposerParams& params;
+    const LStyle lstyle;
     const InstrumentProfile& profile;
     Rng rng;
     const int64_t beat, bar, total;
@@ -160,22 +125,22 @@ private:
         const auto& key = params.key;
         std::vector<int> pcs;
         const bool minor = key.mode == Mode::Minor;
-        switch (params.style)
+        switch (lstyle)
         {
-            case Style::Rock:
-            case Style::Blues:
+            case LStyle::Rock:
+            case LStyle::Blues:
             {
                 // Pentatónica (menor o mayor) + nota de blues en el estilo Blues.
                 const std::vector<int> minorPent { 0, 3, 5, 7, 10 }, majorPent { 0, 2, 4, 7, 9 };
                 for (int iv : (minor ? minorPent : majorPent)) pcs.push_back (mod12 (key.tonic + iv));
-                if (params.style == Style::Blues) pcs.push_back (mod12 (key.tonic + (minor ? 6 : 3)));
+                if (lstyle == LStyle::Blues) pcs.push_back (mod12 (key.tonic + (minor ? 6 : 3)));
                 // Con complejidad alta se completan los grados diatónicos.
                 if (params.complexity > 0.65)
                     for (int pc : key.scalePitchClasses()) pcs.push_back (pc);
                 break;
             }
-            case Style::Melodic:
-            case Style::Electronic:
+            case LStyle::Melodic:
+            case LStyle::Electronic:
                 for (int pc : key.scalePitchClasses()) pcs.push_back (pc);
                 break;
         }
@@ -241,7 +206,7 @@ private:
             const auto& c = lib[i];
             if (c.beats > maxBeats) continue;
             const double d = c.notesPerBeat - targetNotesPerBeat;
-            double w = std::exp (-(d * d) / 1.2) * styleCellWeight (params.style, c);
+            double w = std::exp (-(d * d) / 1.2) * styleCellWeight (lstyle, c);
             if (c.notesPerBeat == 0.0) w = 0.08 * (1.0 - params.density); // silencios dentro de la frase
             if (c.notesPerBeat > targetNotesPerBeat + 1.01) w = 0.0;     // límite de interpretabilidad
             weights[i] = w;
@@ -326,7 +291,7 @@ private:
             Cell cell = motif[motifPos % motif.size()];
             // Variación: con la complejidad sube la probabilidad de cambiar la célula repetida.
             const bool vary = repetition > 0 && rng.chance (0.15 + 0.5 * params.complexity
-                                                               - (params.style == Style::Electronic ? 0.15 : 0.0));
+                                                               - (lstyle == LStyle::Electronic ? 0.15 : 0.0));
             if (vary || cell.beats > beatsLeft) cell = pickCell (beatsLeft);
             double offset = 0.0;
             for (double part : cell.parts)
@@ -466,7 +431,7 @@ private:
 
             Note n;
             n.startTick = s.start;
-            const double legato = s.cadence ? 1.0 : profile.legato * (params.style == Style::Rock && rng.chance (0.2 * params.energy) ? 0.6 : 1.0);
+            const double legato = s.cadence ? 1.0 : profile.legato * (lstyle == LStyle::Rock && rng.chance (0.2 * params.energy) ? 0.6 : 1.0);
             n.lengthTicks = std::max<int64_t> (kPPQ / 16, (int64_t) std::llround ((double) s.length * legato));
             n.pitch = pitch;
             n.velocity = velocityFor (s, ph, i, slots.size());
@@ -510,82 +475,20 @@ private:
 };
 } // namespace
 
-std::vector<std::string> SoloComposer::validate (const ComposerParams& p)
+Sequence legacyCompose (const ComposerParams& p)
 {
-    std::vector<std::string> errors;
-    if (! p.timeSignature.isSupported()) errors.push_back ("Compás no soportado (solo 4/4 y 3/4)");
-    if (p.bars < 1 || p.bars > 64) errors.push_back ("Duración fuera de rango (1..64 compases)");
-    if (p.progression.bars.empty()) errors.push_back ("La progresión está vacía");
-    if (! (p.bpm >= 20.0 && p.bpm <= 400.0)) errors.push_back ("BPM fuera de rango (20..400)");
-    return errors;
-}
-
-Sequence SoloComposer::compose (const ComposerParams& params)
-{
-    if (! validate (params).empty())
+    int ls = p.legacyStyle;
+    if (ls < 0)
     {
-        Sequence empty;
-        empty.timeSignature = params.timeSignature;
-        empty.bars = std::clamp (params.bars, 1, 64);
-        empty.bpm = params.bpm;
-        return empty;
-    }
-    ComposerParams p = params;
-    p.energy = std::clamp (p.energy, 0.0, 1.0);
-    p.density = std::clamp (p.density, 0.0, 1.0);
-    p.complexity = std::clamp (p.complexity, 0.0, 1.0);
-    Composer c (p);
-    return c.run();
-}
-
-Sequence SoloComposer::regenerateBars (const Sequence& current, const ComposerParams& params,
-                                       int fromBar, int toBar, uint64_t newSeed)
-{
-    ComposerParams p = params;
-    p.seed = newSeed;
-    p.bars = current.bars;
-    p.timeSignature = current.timeSignature;
-    const Sequence fresh = compose (p);
-
-    const int64_t barTicks = current.timeSignature.ticksPerBar();
-    fromBar = std::clamp (fromBar, 0, current.bars - 1);
-    toBar = std::clamp (toBar, fromBar, current.bars - 1);
-    const int64_t a = (int64_t) fromBar * barTicks, b = (int64_t) (toBar + 1) * barTicks;
-
-    Sequence out = current;
-    out.notes.clear();
-    int lastBefore = -1;
-    for (const auto& n : current.notes)
-    {
-        if (n.startTick < a)
+        switch (p.style)
         {
-            Note k = n;
-            if (k.endTick() > a) k.lengthTicks = a - k.startTick; // no invadir el fragmento nuevo
-            out.notes.push_back (k);
-            lastBefore = n.pitch;
+            case Style::MelodicRock: case Style::VirtuosoRock: ls = 1; break;
+            case Style::ExpressiveBlues: ls = 2; break;
+            default: ls = 0; break;
         }
-        else if (n.startTick >= b) out.notes.push_back (n);
     }
-    // Ajuste de octava del fragmento para que conecte con la nota previa.
-    std::vector<Note> frag;
-    for (const auto& n : fresh.notes)
-        if (n.startTick >= a && n.startTick < b) { Note k = n; if (k.endTick() > b) k.lengthTicks = b - k.startTick; frag.push_back (k); }
-    if (lastBefore > 0 && ! frag.empty())
-    {
-        const auto& prof = profileFor (params.instrument);
-        int shift = 0;
-        const int jump = frag.front().pitch - lastBefore;
-        if (jump > 9) shift = -12;
-        if (jump < -9) shift = 12;
-        bool fits = true;
-        for (const auto& n : frag)
-            if (n.pitch + shift < prof.range.lowest || n.pitch + shift > prof.range.highest) fits = false;
-        if (fits)
-            for (auto& n : frag) n.pitch += shift;
-    }
-    out.notes.insert (out.notes.end(), frag.begin(), frag.end());
-    out.normalise();
-    return out;
+    Composer c (p, (LStyle) std::clamp (ls, 0, 3));
+    return c.run();
 }
 
 } // namespace solo

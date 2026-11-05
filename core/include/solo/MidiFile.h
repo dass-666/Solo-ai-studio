@@ -15,7 +15,20 @@ struct MidiExportOptions
     int gmProgram = -1;        // -1 = no escribir Program Change
     bool writeKeySignature = true;
     Key key;
+    // Expresión (bends, vibrato, slides) como Pitch Bend. Rango fijado por RPN 0 al inicio de la pista.
+    // Limitación: el pitch bend afecta a todo el canal, así que solo es exacto con una voz a la vez (el solo es monofónico).
+    bool pitchBend = true;
+    int bendRangeSemitones = 12;
+    int bendResolutionTicks = 20;  // cada cuánto se muestrea la curva
+    // Legato: alarga la nota anterior unos ticks para que los sintes en modo mono/portamento liguen.
+    bool legatoOverlap = true;
+    // Marcas de texto informativas (PM = palm mute, H/P = hammer/pull, BU = bend). Ningún sinte las interpreta.
+    bool articulationText = true;
 };
+
+// Desplazamiento de altura (semitonos) de una nota con expresión, en el instante tSec desde su inicio.
+// Misma forma que el motor de síntesis (bends con curva suave, vibrato con retardo, slide de entrada).
+double expressionOffsetSemis (const NoteExpression& e, double tSec, double lengthSec, bool upwardVibrato);
 
 std::vector<uint8_t> writeMidiFile (const Sequence& seq, const MidiExportOptions& opts);
 bool saveMidiFile (const std::string& path, const Sequence& seq, const MidiExportOptions& opts, std::string& error);
@@ -33,6 +46,10 @@ struct ParsedMidi
     int danglingNoteOns = 0;
     std::string trackName;
     int program = -1;
+    struct Bend { int64_t tick; int channel; int value; }; // value: -8192..8191
+    std::vector<Bend> pitchBends;
+    int bendRangeSemitones = 2; // según RPN 0 si aparece (por defecto, 2 del estándar GM)
+    std::vector<std::pair<int64_t, std::string>> texts;
 };
 bool readMidiFile (const std::vector<uint8_t>& data, ParsedMidi& out, std::string& error);
 

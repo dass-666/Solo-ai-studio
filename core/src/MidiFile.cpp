@@ -77,13 +77,95 @@ std::vector<RawEvent> conductorEvents (const Sequence& seq, const MidiExportOpti
     return ev;
 }
 
-std::vector<RawEvent> noteEvents (const Sequence& seq, const MidiExportOptions& opts)
+inline double smoothStep01 (double u) { u = std::clamp (u, 0.0, 1.0); return 0.5 - 0.5 * std::cos (3.141592653589793 * u); }
+
+RawEvent bendEvent (int64_t tick, int channel, int value, int order)
+{
+    const int v = std::clamp (value + 8192, 0, 16383);
+    return { tick, order, { (uint8_t) (0xE0 | channel), (uint8_t) (v & 0x7F), (uint8_t) (v >> 7) } };
+}
+
+std::vector<RawEvent> noteEvents (const Sequence& seqIn, const MidiExportOptions& opts)
 {
     std::vector<RawEvent> ev;
     std::vector<uint8_t> name (opts.trackName.begin(), opts.trackName.end());
     ev.push_back (meta (0, 0x03, name));
     if (opts.gmProgram >= 0 && opts.gmProgram < 128)
         ev.push_back ({ 0, 1, { 0xC0, (uint8_t) opts.gmProgram } });
+
+    Sequence seq = seqIn;
+    const int range = std::clamp (opts.bendRangeSemitones, 1, 24);
+    bool anyExpr = false;
+    for (const auto& n : seq.notes) anyExpr = anyExpr || n.expr.bendType != BendType::None || n.expr.vibratoDepth > 0 || n.expr.slideFrom != 0;
+    if (opts.pitchBend && anyExpr)
+    {
+        // RPN 0 (pitch bend sensitivity) en el canal de cada nota usada
+        bool used[16] {};
+        for (const auto& n : seq.notes) used[n.channel & 15] = true;
+        for (int ch = 0; ch < 16; ++ch)
+        {
+            if (! used[ch]) continue;
+            const uint8_t cc = (uint8_t) (0xB0 | ch);
+            ev.push_back ({ 0, 1, { cc, 101, 0 } });
+            ev.push_back ({ 0, 1, { cc, 100, 0 } });
+            ev.push_back ({ 0, 1, { cc, 6, (uint8_t) range } });
+            ev.push_back ({ 0, 1, { cc, 38, 0 } });
+            ev.push_back ({ 0, 1, { cc, 101, 127 } });
+            ev.push_back ({ 0, 1, { cc, 100, 127 } });
+            ev.push_back (bendEvent (0, ch, 0, 1));
+        }
+        const double secPerTick = 60.0 / ((seq.bpm > 0 ? seq.bpm : 120.0) * kPPQ);
+        const int step = std::max (5, opts.bendResolutionTicks);
+        for (size_t i = 0; i < seq.notes.size(); ++i)
+        {
+            const auto& n = seq.notes[i];
+            const auto& e = n.expr;
+            if (e.bendType == BendType::None && e.vibratoDepth <= 0 && e.slideFrom == 0) continue;
+            const double lenSec = (double) n.lengthTicks * secPerTick;
+            int lastValue = 1 << 30;
+            for (int64_t t = 0; t < n.lengthTicks; t += step)
+            {
+                const double semis = expressionOffsetSemis (e, (double) t * secPerTick, lenSec, true);
+                const int v = (int) std::lround (std::clamp (semis / range, -1.0, 1.0) * 8191.0);
+                if (std::abs (v - lastValue) < 8) continue;
+                // orden 4: después del note-on del mismo tick (la curva empieza con la nota)
+                ev.push_back (bendEvent (n.startTick + t, n.channel, v, t == 0 ? 1 : 4));
+                lastValue = v;
+            }
+            // Volver al centro al terminar (antes de la siguiente nota). Orden 1: antes de note-on/off del mismo tick.
+            ev.push_back (bendEvent (n.endTick(), n.channel, 0, 1));
+        }
+    }
+    if (opts.legatoOverlap)
+    {
+        // Alargar la nota anterior (distinta altura) hasta solapar ligeramente la nota ligada.
+        for (size_t i = 1; i < seq.notes.size(); ++i)
+        {
+            auto& prev = seq.notes[i - 1];
+            const auto& cur = seq.notes[i];
+            if (! cur.expr.legato || prev.pitch == cur.pitch || prev.channel != cur.channel) continue;
+            const int64_t gap = cur.startTick - prev.endTick();
+            if (gap >= 0 && gap <= 30) prev.lengthTicks = cur.startTick - prev.startTick + 10;
+        }
+        const int64_t total = seq.lengthTicks();
+        for (auto& n : seq.notes) n.lengthTicks = std::min (n.lengthTicks, total - n.startTick);
+    }
+    if (opts.articulationText)
+    {
+        for (const auto& n : seq.notes)
+        {
+            std::string t;
+            if (n.expr.palmMute) t += "PM ";
+            if (n.expr.legato) t += "H/P ";
+            if (n.expr.bendType == BendType::Up) t += "BU ";
+            if (n.expr.bendType == BendType::Release) t += "BR ";
+            if (n.expr.bendType == BendType::PreBend) t += "PB ";
+            if (n.expr.slideFrom != 0) t += "SL ";
+            if (t.empty()) continue;
+            t.pop_back();
+            ev.push_back (meta (n.startTick, 0x01, std::vector<uint8_t> (t.begin(), t.end())));
+        }
+    }
     for (const auto& e : buildEventList (seq))
     {
         if (e.type == EventType::NoteOn)
@@ -94,6 +176,44 @@ std::vector<RawEvent> noteEvents (const Sequence& seq, const MidiExportOptions& 
     return ev;
 }
 } // namespace
+
+double expressionOffsetSemis (const NoteExpression& e, double t, double L, bool upwardVibrato)
+{
+    double off = 0.0;
+    L = std::max (1.0e-4, L);
+    if (e.bendType != BendType::None && e.bendSemitones > 0.0f)
+    {
+        const double B = e.bendSemitones;
+        const double bs = e.bendStart * L;
+        const double bt = std::clamp ((double) e.bendTime * L, 0.03, 0.6);
+        switch (e.bendType)
+        {
+            case BendType::Up: off += B * smoothStep01 ((t - bs) / bt); break;
+            case BendType::Release: off += B * (1.0 - smoothStep01 ((t - bs) / bt)); break;
+            case BendType::PreBend: off += B; break;
+            case BendType::UpRelease:
+            {
+                const double downStart = std::max (bs + bt, 0.62 * L);
+                off += B * (smoothStep01 ((t - bs) / bt) - smoothStep01 ((t - downStart) / bt));
+                break;
+            }
+            case BendType::None: break;
+        }
+    }
+    if (e.vibratoDepth > 0.0f)
+    {
+        const double start = e.vibratoDelay * L;
+        const double ramp = std::clamp ((t - start) / 0.18, 0.0, 1.0);
+        const double ph = 2.0 * 3.141592653589793 * e.vibratoRate * t;
+        if (ramp > 0.0) off += (upwardVibrato ? e.vibratoDepth * (0.5 - 0.5 * std::cos (ph)) : e.vibratoDepth * std::sin (ph)) * ramp;
+    }
+    if (e.slideFrom != 0)
+    {
+        const double g = std::min (0.09, 0.3 * L);
+        if (t < g) off += e.slideFrom * (1.0 - smoothStep01 (t / g));
+    }
+    return off;
+}
 
 std::vector<uint8_t> writeMidiFile (const Sequence& seqIn, const MidiExportOptions& opts)
 {
@@ -159,6 +279,7 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
         const size_t end = p + len;
         int64_t tick = 0;
         uint8_t running = 0;
+        int rpnMsb = 127, rpnLsb = 127;
         std::map<int, std::vector<std::pair<int64_t, int>>> open; // (canal*128+nota) -> pila (tick, vel)
         bool sawEnd = false;
         while (p < end)
@@ -180,8 +301,15 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
                 if (p + 1 > end) { error = "Meta truncado"; return false; }
                 const uint8_t type = d[p++];
                 uint32_t l = 0;
-                for (int i = 0; i < 4; ++i) { const uint8_t b = d[p++]; l = (l << 7) | (b & 0x7F); if (! (b & 0x80)) break; }
-                if (p + l > end) { error = "Meta truncado"; return false; }
+                for (int i = 0; i < 4; ++i)
+                {
+                    if (p >= end) { error = "Meta truncado"; return false; }
+                    const uint8_t b = d[p++];
+                    l = (l << 7) | (b & 0x7F);
+                    if (! (b & 0x80)) break;
+                }
+                if (l > end - p) { error = "Meta truncado"; return false; }
+                if (type == 0x01) out.texts.push_back ({ tick, std::string ((const char*) &d[p], l) });
                 if (type == 0x51 && l == 3) out.bpm = 60000000.0 / (double) ((d[p] << 16) | (d[p + 1] << 8) | d[p + 2]);
                 if (type == 0x58 && l == 4) { out.tsNumerator = d[p]; out.tsDenominator = 1 << d[p + 1]; }
                 if (type == 0x03 && out.trackName.empty()) out.trackName.assign ((const char*) &d[p], l);
@@ -192,7 +320,14 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
             if (status == 0xF0 || status == 0xF7)
             {
                 uint32_t l = 0;
-                for (int i = 0; i < 4; ++i) { const uint8_t b = d[p++]; l = (l << 7) | (b & 0x7F); if (! (b & 0x80)) break; }
+                for (int i = 0; i < 4; ++i)
+                {
+                    if (p >= end) { error = "SysEx truncado"; return false; }
+                    const uint8_t b = d[p++];
+                    l = (l << 7) | (b & 0x7F);
+                    if (! (b & 0x80)) break;
+                }
+                if (l > end - p) { error = "SysEx truncado"; return false; }
                 p += l;
                 continue;
             }
@@ -204,6 +339,13 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
             const int a = d[p], b = nData > 1 ? d[p + 1] : 0;
             p += (size_t) nData;
             if (hi == 0xC0) out.program = a;
+            if (hi == 0xE0) out.pitchBends.push_back ({ tick, ch, ((b << 7) | a) - 8192 });
+            if (hi == 0xB0)
+            {
+                if (a == 101) rpnMsb = b;
+                else if (a == 100) rpnLsb = b;
+                else if (a == 6 && rpnMsb == 0 && rpnLsb == 0) out.bendRangeSemitones = b;
+            }
             if (hi == 0x90 && b > 0) open[ch * 128 + a].push_back ({ tick, b });
             else if (hi == 0x80 || (hi == 0x90 && b == 0))
             {
@@ -211,7 +353,13 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
                 if (st.empty()) { ++out.unmatchedNoteOffs; continue; }
                 auto [start, vel] = st.front();
                 st.erase (st.begin());
-                out.notes.push_back ({ start, tick - start, a, vel, ch });
+                Note nn;
+                nn.startTick = start;
+                nn.lengthTicks = tick - start;
+                nn.pitch = a;
+                nn.velocity = vel;
+                nn.channel = ch;
+                out.notes.push_back (nn);
             }
         }
         if (! sawEnd) { error = "Falta End of Track"; return false; }

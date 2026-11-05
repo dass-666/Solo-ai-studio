@@ -29,10 +29,10 @@ bool parseInstrument (const std::string& s, InstrumentId& out)
 
 bool parseStyle (const std::string& s, Style& out)
 {
-    if (s == "melodic" || s == "melodico") { out = Style::Melodic; return true; }
-    if (s == "rock") { out = Style::Rock; return true; }
-    if (s == "blues") { out = Style::Blues; return true; }
-    if (s == "electronic" || s == "electronico") { out = Style::Electronic; return true; }
+    if (s == "melodic" || s == "melodico") { out = Style::Emotional; return true; }
+    if (s == "rock") { out = Style::MelodicRock; return true; }
+    if (s == "blues") { out = Style::ExpressiveBlues; return true; }
+    if (s == "electronic" || s == "electronico") { out = Style::VirtuosoRock; return true; }
     return false;
 }
 
