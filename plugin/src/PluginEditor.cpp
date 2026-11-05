@@ -1,0 +1,612 @@
+#include "PluginEditor.h"
+
+using namespace solo;
+
+namespace
+{
+const juce::Colour kBg (0xff101216), kPanel (0xff181b21), kText (0xffd7dce5), kDim (0xff8a93a3),
+    kAccent (0xff2ec4b6), kError (0xffff6b6b);
+constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 124;
+
+juce::String U (const char* s) { return juce::String::fromUTF8 (s); }
+
+void setupLabel (juce::Label& l, const juce::String& text, juce::Component& parent)
+{
+    l.setText (text, juce::dontSendNotification);
+    l.setColour (juce::Label::textColourId, kDim);
+    l.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    l.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    l.setFont (juce::FontOptions (13.0f));
+    parent.addAndMakeVisible (l);
+}
+
+void setupSlider (juce::Slider& s, double lo, double hi, double step, juce::Component& parent)
+{
+    s.setSliderStyle (juce::Slider::LinearHorizontal);
+    s.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 20);
+    s.setRange (lo, hi, step);
+    parent.addAndMakeVisible (s);
+}
+} // namespace
+
+// ============================================================ LookAndFeel
+SoloLookAndFeel::SoloLookAndFeel()
+{
+    setColourScheme ({ 0xff181b21, 0xff101216, 0xff20242c, 0xff3a404c, 0xffd7dce5, 0xff2ec4b6, 0xff0b0c0f, 0xff2ec4b6, 0xffd7dce5 });
+    setColour (juce::TextButton::buttonColourId, juce::Colour (0xff232730));
+    setColour (juce::TextButton::buttonOnColourId, kAccent);
+    setColour (juce::TextButton::textColourOffId, kText);
+    setColour (juce::TextButton::textColourOnId, juce::Colour (0xff0b0c0f));
+    setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff20242c));
+    setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff2e333d));
+    setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff20242c));
+    setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff2e333d));
+    setColour (juce::TextEditor::focusedOutlineColourId, kAccent);
+    setColour (juce::Slider::trackColourId, kAccent);
+    setColour (juce::Slider::thumbColourId, juce::Colour (0xffe8ecf2));
+    setColour (juce::Slider::backgroundColourId, juce::Colour (0xff2a2f38));
+    setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    setColour (juce::ToggleButton::tickColourId, kAccent);
+    setColour (juce::PopupMenu::backgroundColourId, juce::Colour (0xff1d2027));
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, kAccent.withAlpha (0.35f));
+}
+
+void SoloLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour& bg, bool over, bool down)
+{
+    auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+    auto c = b.getToggleState() ? findColour (juce::TextButton::buttonOnColourId) : bg;
+    if (down) c = c.brighter (0.15f);
+    else if (over) c = c.brighter (0.08f);
+    if (! b.isEnabled()) c = c.withAlpha (0.4f);
+    g.setColour (c);
+    g.fillRoundedRectangle (r, 5.0f);
+    g.setColour (juce::Colour (0xff2e333d));
+    g.drawRoundedRectangle (r, 5.0f, 1.0f);
+}
+
+// ============================================================ Arrastre
+void DragMidiArea::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (juce::Colour (0xff1d2027));
+    g.fillRoundedRectangle (r, 5.0f);
+    g.setColour (kDim);
+    const float dashes[] = { 4.0f, 3.0f };
+    juce::Path p, dashed;
+    p.addRoundedRectangle (r, 5.0f);
+    juce::PathStrokeType (1.0f).createDashedStroke (dashed, p, dashes, 2);
+    g.fillPath (dashed);
+    g.setFont (juce::FontOptions (12.5f));
+    g.drawText (U ("Arrastrar MIDI al DAW (experimental)"), getLocalBounds(), juce::Justification::centred);
+}
+
+void DragMidiArea::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 6 || ! proc.hasSequence()) return;
+    dragging = true;
+    const auto f = proc.writeTempMidiForDrag();
+    if (f.existsAsFile())
+        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this,
+                                                                   [this] { dragging = false; });
+    else
+        dragging = false;
+}
+
+// ============================================================ Editor
+SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
+    : AudioProcessorEditor (&p), proc (p), dragArea (p)
+{
+    setLookAndFeel (&lnf);
+
+    title.setText ("SOLO AI STUDIO", juce::dontSendNotification);
+    title.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    title.setColour (juce::Label::textColourId, kText);
+    addAndMakeVisible (title);
+    hostLabel.setJustificationType (juce::Justification::centredRight);
+    hostLabel.setColour (juce::Label::textColourId, kDim);
+    addAndMakeVisible (hostLabel);
+    statusLabel.setColour (juce::Label::textColourId, kDim);
+    statusLabel.setFont (juce::FontOptions (12.5f));
+    addAndMakeVisible (statusLabel);
+
+    addAndMakeVisible (easyButton);
+    addAndMakeVisible (proButton);
+    easyButton.onClick = [this] { setProMode (false); };
+    proButton.onClick = [this] { setProMode (true); };
+
+    // ---------------------------------------------------- Modo fácil
+    setupLabel (keyLabel, "Tonalidad", *this);
+    setupLabel (progLabel, "Acordes", *this);
+    setupLabel (instLabel, "Instrumento", *this);
+    setupLabel (styleLabel, "Estilo", *this);
+    setupLabel (barsLabel, U ("Duración"), *this);
+    setupLabel (tsLabel, U ("Compás"), *this);
+    setupLabel (energyLabel, "Intensidad", *this);
+    setupLabel (densityLabel, "Densidad", *this);
+
+    keyEditor.setTooltip (U ("Ej.: Am, C, F#m, La menor"));
+    progEditor.setTooltip (U ("Un acorde por compás: Am F C G  (también Am | F | C | G, % repite)"));
+    for (auto* ed : { &keyEditor, &progEditor })
+    {
+        ed->setFont (juce::FontOptions (14.0f));
+        ed->setIndents (6, 4);
+        ed->onTextChange = [this] { if (! updating) { validateTextFields(); pushSettings(); } };
+        addAndMakeVisible (ed);
+    }
+
+    for (int i = 0; i < kNumInstruments; ++i) instrumentBox.addItem (U (instrumentName ((InstrumentId) i)), i + 1);
+    for (int i = 0; i < kNumStyles; ++i) styleBox.addItem (U (styleName ((Style) i)), i + 1);
+    for (int b : { 2, 4, 8, 16 }) barsBox.addItem (juce::String (b) + U (" compases"), b);
+    tsBox.addItem ("4/4", 4);
+    tsBox.addItem ("3/4", 3);
+    for (auto* cb : { &instrumentBox, &styleBox, &barsBox, &tsBox })
+    {
+        cb->onChange = [this] { if (! updating) pushSettings(); };
+        addAndMakeVisible (cb);
+    }
+
+    setupSlider (energySlider, 0.0, 1.0, 0.01, *this);
+    setupSlider (densitySlider, 0.0, 1.0, 0.01, *this);
+    energySlider.onValueChange = densitySlider.onValueChange = [this] { if (! updating) pushSettings(); };
+
+    generateButton.setColour (juce::TextButton::buttonColourId, kAccent.darker (0.25f));
+    generateButton.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
+    generateButton.onClick = [this] { onGenerate(); };
+    playButton.onClick = [this] {
+        if (proc.isPreviewing()) proc.stopPreview();
+        else if (proc.hasSequence()) proc.startPreview();
+        else status (U ("Primero genera un solo"), true);
+    };
+    prevButton.onClick = [this] { proc.previousVariation(); refreshSequence(); };
+    nextButton.onClick = [this] { proc.nextVariation(); refreshSequence(); };
+    variationLabel.setJustificationType (juce::Justification::centred);
+    variationLabel.setColour (juce::Label::textColourId, kText);
+    exportMidiButton.onClick = [this] { onExportMidi(); };
+    exportWavButton.onClick = [this] { onExportWav(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &generateButton, &playButton, &prevButton, &nextButton,
+                                                             &variationLabel, &exportMidiButton, &exportWavButton, &dragArea })
+        addAndMakeVisible (c);
+
+    // ---------------------------------------------------- Modo Pro
+    setupLabel (seedLabel, "Semilla", *this);
+    setupLabel (complexityLabel, "Complejidad", *this);
+    setupLabel (bpmLabel, "BPM manual", *this);
+    setupLabel (startBarLabel, U ("Empieza en compás"), *this);
+    setupLabel (velocityLabel, "Velocity nota", *this);
+    setupLabel (presetLabel, "Preset", *this);
+
+    seedEditor.setInputRestrictions (20, "0123456789");
+    seedEditor.onTextChange = [this] { if (! updating) pushSettings(); };
+    addAndMakeVisible (seedEditor);
+    lockSeedToggle.onClick = [this] { lockSeed = lockSeedToggle.getToggleState(); };
+    addAndMakeVisible (lockSeedToggle);
+
+    setupSlider (complexitySlider, 0.0, 1.0, 0.01, *this);
+    setupSlider (bpmSlider, 40.0, 240.0, 0.1, *this);
+    setupSlider (startBarSlider, 1.0, 256.0, 1.0, *this);
+    setupSlider (velocitySlider, 1.0, 127.0, 1.0, *this);
+    complexitySlider.onValueChange = bpmSlider.onValueChange = startBarSlider.onValueChange = [this] { if (! updating) pushSettings(); };
+    velocitySlider.onDragEnd = [this] { pianoRoll.setSelectedVelocity ((int) velocitySlider.getValue()); };
+    velocitySlider.onValueChange = [this] {
+        if (! updating && ! velocitySlider.isMouseButtonDown()) pianoRoll.setSelectedVelocity ((int) velocitySlider.getValue());
+    };
+
+    for (auto* t : { &hostTempoToggle, &syncToggle, &loopToggle })
+    {
+        t->onClick = [this] { if (! updating) pushSettings(); };
+        addAndMakeVisible (t);
+    }
+    regenButton.onClick = [this] { onRegenerateRange(); };
+    addAndMakeVisible (regenButton);
+
+    const auto factory = factoryPresets();
+    for (size_t i = 0; i < factory.size(); ++i) presetBox.addItem (U (factory[i].name), (int) i + 1);
+    presetBox.setTextWhenNothingSelected (U ("Presets de fábrica…"));
+    presetBox.onChange = [this] {
+        const int id = presetBox.getSelectedId();
+        const auto f = factoryPresets();
+        if (id < 1 || id > (int) f.size()) return;
+        auto s = f[(size_t) id - 1].settings;
+        const auto cur = proc.getSettings();
+        // Un preset cambia el material musical, no la integración con el DAW.
+        s.useHostTempo = cur.useHostTempo; s.syncToHost = cur.syncToHost; s.manualBpm = cur.manualBpm;
+        s.startBar = cur.startBar; s.loop = cur.loop; s.proMode = cur.proMode; s.seed = cur.seed;
+        proc.setSettings (s);
+        refreshFromProcessor();
+        status (U ("Preset cargado: ") + U (f[(size_t) id - 1].name) + U (". Pulsa GENERAR."));
+    };
+    rateBox.addItem ("WAV 44.1k", 44100);
+    rateBox.addItem ("WAV 48k", 48000);
+    fmtBox.addItem ("MIDI 1", 2);
+    fmtBox.addItem ("MIDI 0", 1);
+    for (auto* cb : { &rateBox, &fmtBox }) cb->onChange = [this] { if (! updating) pushSettings(); };
+    savePresetButton.onClick = [this] { onSavePreset(); };
+    loadPresetButton.onClick = [this] { onLoadPreset(); };
+    zoomInButton.onClick = [this] { pianoRoll.zoomHorizontal (1.25f); };
+    zoomOutButton.onClick = [this] { pianoRoll.zoomHorizontal (0.8f); };
+    fitButton.onClick = [this] { pianoRoll.fitToContent(); };
+    for (auto* c : std::initializer_list<juce::Component*> { &presetBox, &rateBox, &fmtBox, &savePresetButton, &loadPresetButton,
+                                                             &zoomInButton, &zoomOutButton, &fitButton })
+        addAndMakeVisible (c);
+
+    // ---------------------------------------------------- Piano roll
+    pianoRoll.onEdit = [this] (const Sequence& s) {
+        proc.replaceCurrentSequence (s);
+        pianoRoll.setSequence (proc.getCurrentSequence());
+        status (U ("Nota editada"));
+    };
+    pianoRoll.onSelectionChanged = [this] {
+        const int v = pianoRoll.getSelectedVelocity();
+        const juce::ScopedValueSetter<bool> svs (updating, true);
+        velocitySlider.setEnabled (v > 0);
+        if (v > 0) velocitySlider.setValue (v, juce::dontSendNotification);
+        const int a = pianoRoll.getRangeStartBar(), b = pianoRoll.getRangeEndBar();
+        regenButton.setButtonText (a >= 0 ? U ("Regenerar compases ") + juce::String (a + 1) + "-" + juce::String (b + 1)
+                                          : U ("Regenerar compases (elige en la regla)"));
+    };
+    addAndMakeVisible (pianoRoll);
+
+    proc.addChangeListener (this);
+    constrainer.setMinimumSize (1100, 640);
+    constrainer.setMaximumSize (2000, 1400);
+    setConstrainer (&constrainer);
+    setResizable (true, true);
+    setSize (1180, 720);
+
+    refreshFromProcessor();
+    pianoRoll.onSelectionChanged();
+    startTimerHz (30);
+}
+
+SoloAIStudioEditor::~SoloAIStudioEditor()
+{
+    proc.removeChangeListener (this);
+    setLookAndFeel (nullptr);
+}
+
+// ------------------------------------------------------------------ sincronización UI <-> procesador
+void SoloAIStudioEditor::refreshFromProcessor()
+{
+    const juce::ScopedValueSetter<bool> svs (updating, true);
+    const auto s = proc.getSettings();
+    keyEditor.setText (U (s.keyText.c_str()), false);
+    progEditor.setText (U (s.progressionText.c_str()), false);
+    instrumentBox.setSelectedId ((int) s.instrument + 1, juce::dontSendNotification);
+    styleBox.setSelectedId ((int) s.style + 1, juce::dontSendNotification);
+    if (barsBox.indexOfItemId (s.bars) < 0) barsBox.addItem (juce::String (s.bars) + U (" compases"), s.bars);
+    barsBox.setSelectedId (s.bars, juce::dontSendNotification);
+    tsBox.setSelectedId (s.tsNumerator, juce::dontSendNotification);
+    energySlider.setValue (s.energy, juce::dontSendNotification);
+    densitySlider.setValue (s.density, juce::dontSendNotification);
+    complexitySlider.setValue (s.complexity, juce::dontSendNotification);
+    seedEditor.setText (juce::String ((juce::uint64) s.seed), false);
+    bpmSlider.setValue (s.manualBpm, juce::dontSendNotification);
+    startBarSlider.setValue (s.startBar, juce::dontSendNotification);
+    hostTempoToggle.setToggleState (s.useHostTempo, juce::dontSendNotification);
+    syncToggle.setToggleState (s.syncToHost, juce::dontSendNotification);
+    loopToggle.setToggleState (s.loop, juce::dontSendNotification);
+    rateBox.setSelectedId (s.wavSampleRate == 44100 ? 44100 : 48000, juce::dontSendNotification);
+    fmtBox.setSelectedId (s.midiFormat == 0 ? 1 : 2, juce::dontSendNotification);
+    setProMode (s.proMode);
+    validateTextFields();
+    refreshSequence();
+}
+
+void SoloAIStudioEditor::refreshSequence()
+{
+    pianoRoll.setSequence (proc.getCurrentSequence());
+    const int n = proc.variationCount();
+    variationLabel.setText (n == 0 ? U ("Sin variaciones")
+                                   : U ("Variación ") + juce::String (proc.variationIndex() + 1) + " / " + juce::String (n),
+                            juce::dontSendNotification);
+    prevButton.setEnabled (proc.variationIndex() > 0);
+    nextButton.setEnabled (proc.variationIndex() + 1 < n);
+}
+
+void SoloAIStudioEditor::validateTextFields()
+{
+    Key k;
+    const bool keyOk = Key::parse (keyEditor.getText().toStdString(), k);
+    Progression prog;
+    std::string err;
+    const bool progOk = Progression::parse (progEditor.getText().toStdString(), prog, err);
+    keyEditor.setColour (juce::TextEditor::outlineColourId, keyOk ? juce::Colour (0xff2e333d) : kError);
+    progEditor.setColour (juce::TextEditor::outlineColourId, progOk ? juce::Colour (0xff2e333d) : kError);
+    keyEditor.repaint();
+    progEditor.repaint();
+    if (progOk) pianoRoll.setProgression (prog, keyOk && k.prefersFlats());
+    if (! keyOk) status (U ("Tonalidad no válida (ej.: Am, C, F#m)"), true);
+    else if (! progOk) status (U (err.c_str()), true);
+    else
+    {
+        const auto w = prog.validate (k);
+        if (! w.empty()) status (U ("Aviso: ") + U (w.front().c_str()));
+    }
+}
+
+void SoloAIStudioEditor::pushSettings()
+{
+    auto s = proc.getSettings();
+    s.keyText = keyEditor.getText().toStdString();
+    s.progressionText = progEditor.getText().toStdString();
+    s.instrument = (InstrumentId) juce::jlimit (0, kNumInstruments - 1, instrumentBox.getSelectedId() - 1);
+    s.style = (Style) juce::jlimit (0, kNumStyles - 1, styleBox.getSelectedId() - 1);
+    if (barsBox.getSelectedId() > 0) s.bars = barsBox.getSelectedId();
+    if (tsBox.getSelectedId() > 0) s.tsNumerator = tsBox.getSelectedId();
+    s.energy = energySlider.getValue();
+    s.density = densitySlider.getValue();
+    s.complexity = complexitySlider.getValue();
+    s.seed = (uint64_t) seedEditor.getText().getLargeIntValue();
+    s.manualBpm = bpmSlider.getValue();
+    s.startBar = (int) startBarSlider.getValue();
+    s.useHostTempo = hostTempoToggle.getToggleState();
+    s.syncToHost = syncToggle.getToggleState();
+    s.loop = loopToggle.getToggleState();
+    if (rateBox.getSelectedId() > 0) s.wavSampleRate = rateBox.getSelectedId();
+    if (fmtBox.getSelectedId() > 0) s.midiFormat = fmtBox.getSelectedId() == 1 ? 0 : 1;
+    proc.setSettings (s);
+}
+
+void SoloAIStudioEditor::setProMode (bool pro)
+{
+    easyButton.setToggleState (! pro, juce::dontSendNotification);
+    proButton.setToggleState (pro, juce::dontSendNotification);
+    for (auto* c : std::initializer_list<juce::Component*> {
+             &seedLabel, &seedEditor, &lockSeedToggle, &complexityLabel, &complexitySlider, &bpmLabel, &bpmSlider,
+             &hostTempoToggle, &syncToggle, &startBarLabel, &startBarSlider, &loopToggle, &regenButton, &velocityLabel,
+             &velocitySlider, &presetLabel, &presetBox, &savePresetButton, &loadPresetButton, &rateBox, &fmtBox })
+        c->setVisible (pro);
+    if (! updating)
+    {
+        auto s = proc.getSettings();
+        s.proMode = pro;
+        proc.setSettings (s);
+    }
+    resized();
+    repaint();
+}
+
+void SoloAIStudioEditor::status (const juce::String& s, bool error)
+{
+    statusLabel.setText (s, juce::dontSendNotification);
+    statusLabel.setColour (juce::Label::textColourId, error ? kError : kDim);
+}
+
+// ------------------------------------------------------------------ acciones
+void SoloAIStudioEditor::onGenerate()
+{
+    pushSettings();
+    if (! lockSeed)
+    {
+        auto s = proc.getSettings();
+        s.seed = (uint64_t) (juce::Random::getSystemRandom().nextInt64() & 0x7FFFFFFFFFFFll);
+        proc.setSettings (s);
+        const juce::ScopedValueSetter<bool> svs (updating, true);
+        seedEditor.setText (juce::String ((juce::uint64) s.seed), false);
+    }
+    juce::String msg;
+    const bool ok = proc.generateNew (msg);
+    status (msg, ! ok);
+    if (ok) refreshSequence();
+}
+
+void SoloAIStudioEditor::onRegenerateRange()
+{
+    const int a = pianoRoll.getRangeStartBar(), b = pianoRoll.getRangeEndBar();
+    if (a < 0) { status (U ("Arrastra sobre la regla de compases (franja superior del piano roll) para elegir el fragmento"), true); return; }
+    pushSettings();
+    juce::String msg;
+    const bool ok = proc.regenerateBars (a, b, msg);
+    status (msg, ! ok);
+    if (ok) refreshSequence();
+}
+
+juce::File SoloAIStudioEditor::defaultExportFolder() const
+{
+    auto d = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Solo AI Studio");
+    d.createDirectory();
+    return d;
+}
+
+void SoloAIStudioEditor::onExportMidi()
+{
+    if (! proc.hasSequence()) { status (U ("Primero genera un solo"), true); return; }
+    const auto s = proc.getSettings();
+    const auto name = juce::String ("Solo ") + juce::String (s.keyText) + " " + juce::String (juce::roundToInt (proc.effectiveBpm()))
+                      + "bpm v" + juce::String (proc.variationIndex() + 1) + ".mid";
+    chooser = std::make_unique<juce::FileChooser> ("Exportar MIDI", defaultExportFolder().getChildFile (name), "*.mid");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this] (const juce::FileChooser& fc) {
+                              auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              if (! f.hasFileExtension ("mid")) f = f.withFileExtension ("mid");
+                              juce::String msg;
+                              const bool ok = proc.exportMidi (f, msg);
+                              status (msg, ! ok);
+                          });
+}
+
+void SoloAIStudioEditor::onExportWav()
+{
+    if (! proc.hasSequence()) { status (U ("Primero genera un solo"), true); return; }
+    const auto s = proc.getSettings();
+    const auto name = juce::String ("Solo ") + juce::String (s.keyText) + " " + juce::String (juce::roundToInt (proc.effectiveBpm()))
+                      + "bpm v" + juce::String (proc.variationIndex() + 1) + ".wav";
+    chooser = std::make_unique<juce::FileChooser> ("Exportar WAV", defaultExportFolder().getChildFile (name), "*.wav");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this] (const juce::FileChooser& fc) {
+                              auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              if (! f.hasFileExtension ("wav")) f = f.withFileExtension ("wav");
+                              juce::String msg;
+                              const bool ok = proc.exportWav (f, msg);
+                              status (msg, ! ok);
+                          });
+}
+
+void SoloAIStudioEditor::onSavePreset()
+{
+    pushSettings();
+    chooser = std::make_unique<juce::FileChooser> ("Guardar preset", defaultExportFolder().getChildFile ("Mi preset.solopreset"),
+                                                   "*.solopreset");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                              | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [this] (const juce::FileChooser& fc) {
+                              auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              f = f.withFileExtension ("solopreset");
+                              const auto txt = serializePreset (proc.getSettings(), f.getFileNameWithoutExtension().toStdString());
+                              const bool ok = f.replaceWithText (U (txt.c_str()));
+                              status (ok ? U ("Preset guardado: ") + f.getFileName() : U ("No se pudo guardar el preset"), ! ok);
+                          });
+}
+
+void SoloAIStudioEditor::onLoadPreset()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Cargar preset", defaultExportFolder(), "*.solopreset");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this] (const juce::FileChooser& fc) {
+                              const auto f = fc.getResult();
+                              if (! f.existsAsFile()) return;
+                              SoloSettings loaded;
+                              std::string name, err;
+                              if (! deserializePreset (f.loadFileAsString().toStdString(), loaded, name, err))
+                              {
+                                  status (U ("Preset no válido: ") + U (err.c_str()), true);
+                                  return;
+                              }
+                              const auto cur = proc.getSettings();
+                              loaded.useHostTempo = cur.useHostTempo; loaded.syncToHost = cur.syncToHost;
+                              loaded.startBar = cur.startBar; loaded.proMode = cur.proMode;
+                              proc.setSettings (loaded);
+                              refreshFromProcessor();
+                              status (U ("Preset cargado: ") + U (name.c_str()));
+                          });
+}
+
+// ------------------------------------------------------------------ timer / cambios
+void SoloAIStudioEditor::timerCallback()
+{
+    const auto h = proc.getHostInfo();
+    const auto s = proc.getSettings();
+    juce::String t;
+    if (h.valid)
+        t << "DAW: " << juce::String (h.bpm, 1) << " BPM " << h.tsNum << "/" << h.tsDen << (h.playing ? U ("  ▶") : U ("  ■"));
+    else
+        t << U ("DAW: sin tempo");
+    t << U ("   ·   Solo a ") << juce::String (proc.effectiveBpm(), 1) << " BPM";
+    if (h.valid && h.tsNum != s.tsNumerator) t << U ("  ⚠ compás distinto");
+    hostLabel.setText (t, juce::dontSendNotification);
+
+    playButton.setButtonText (proc.isPreviewing() ? "DETENER" : "ESCUCHAR");
+    playButton.setToggleState (proc.isPreviewing(), juce::dontSendNotification);
+    bpmSlider.setEnabled (! s.useHostTempo || ! h.valid);
+    pianoRoll.setPlayheadTick (proc.playheadTick());
+
+    const auto st = proc.getLastStatus();
+    if (st != lastStatusShown) { lastStatusShown = st; status (st); }
+}
+
+void SoloAIStudioEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    refreshFromProcessor();
+}
+
+// ------------------------------------------------------------------ layout
+void SoloAIStudioEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (kBg);
+    g.setColour (kPanel);
+    g.fillRect (0, 0, getWidth(), kHeader);
+    g.fillRect (0, kHeader, kLeft, getHeight() - kHeader - kStatus);
+    if (proButton.getToggleState()) g.fillRect (kLeft, kHeader, getWidth() - kLeft, kPro);
+    g.setColour (juce::Colour (0xff262a33));
+    g.drawHorizontalLine (kHeader, 0.0f, (float) getWidth());
+    g.drawVerticalLine (kLeft, (float) kHeader, (float) (getHeight() - kStatus));
+    g.drawHorizontalLine (getHeight() - kStatus, 0.0f, (float) getWidth());
+}
+
+void SoloAIStudioEditor::resized()
+{
+    auto r = getLocalBounds();
+    auto header = r.removeFromTop (kHeader).reduced (12, 8);
+    title.setBounds (header.removeFromLeft (170));
+    easyButton.setBounds (header.removeFromLeft (64));
+    header.removeFromLeft (4);
+    proButton.setBounds (header.removeFromLeft (64));
+    hostLabel.setBounds (header);
+    statusLabel.setBounds (r.removeFromBottom (kStatus).reduced (10, 0));
+
+    // ---- panel izquierdo
+    auto left = r.removeFromLeft (kLeft).reduced (12, 10);
+    auto row = [&] (juce::Label& l, juce::Component& c, int h = 26) {
+        auto rr = left.removeFromTop (h);
+        l.setBounds (rr.removeFromLeft (84));
+        c.setBounds (rr);
+        left.removeFromTop (7);
+    };
+    row (keyLabel, keyEditor);
+    row (progLabel, progEditor);
+    row (instLabel, instrumentBox);
+    row (styleLabel, styleBox);
+    row (barsLabel, barsBox);
+    row (tsLabel, tsBox);
+    row (energyLabel, energySlider);
+    row (densityLabel, densitySlider);
+    left.removeFromTop (4);
+    generateButton.setBounds (left.removeFromTop (44));
+    left.removeFromTop (8);
+    playButton.setBounds (left.removeFromTop (32));
+    left.removeFromTop (8);
+    {
+        auto v = left.removeFromTop (30);
+        prevButton.setBounds (v.removeFromLeft (36));
+        nextButton.setBounds (v.removeFromRight (36));
+        variationLabel.setBounds (v);
+    }
+    left.removeFromTop (8);
+    {
+        auto e = left.removeFromTop (30);
+        exportMidiButton.setBounds (e.removeFromLeft (e.getWidth() / 2 - 3));
+        e.removeFromLeft (6);
+        exportWavButton.setBounds (e);
+    }
+    left.removeFromTop (8);
+    dragArea.setBounds (left.removeFromTop (34));
+
+    // ---- panel Pro
+    if (proButton.getToggleState())
+    {
+        auto pro = r.removeFromTop (kPro).reduced (10, 8);
+        auto r1 = pro.removeFromTop (36).reduced (0, 5);
+        auto r2 = pro.removeFromTop (36).reduced (0, 5);
+        auto r3 = pro.removeFromTop (36).reduced (0, 5);
+        auto place = [] (juce::Rectangle<int>& rr, juce::Component& c, int w) {
+            c.setBounds (rr.removeFromLeft (juce::jmin (w, rr.getWidth())));
+            rr.removeFromLeft (6);
+        };
+        place (r1, seedLabel, 52); place (r1, seedEditor, 130); place (r1, lockSeedToggle, 112);
+        place (r1, complexityLabel, 82); place (r1, complexitySlider, 170);
+        place (r1, velocityLabel, 86); place (r1, velocitySlider, r1.getWidth());
+        place (r2, bpmLabel, 76); place (r2, bpmSlider, 170); place (r2, hostTempoToggle, 112);
+        place (r2, syncToggle, 140); place (r2, startBarLabel, 116); place (r2, startBarSlider, r2.getWidth());
+        place (r3, regenButton, 240); place (r3, loopToggle, 62);
+        place (r3, presetLabel, 46);
+        place (r3, presetBox, juce::jmax (100, r3.getWidth() - (66 + 62 + 100 + 96 + 4 * 6)));
+        place (r3, savePresetButton, 66); place (r3, loadPresetButton, 62);
+        place (r3, rateBox, 100); place (r3, fmtBox, r3.getWidth());
+    }
+
+    // ---- piano roll
+    auto roll = r.reduced (8);
+    auto tools = roll.removeFromTop (26);
+    fitButton.setBounds (tools.removeFromRight (64));
+    tools.removeFromRight (4);
+    zoomInButton.setBounds (tools.removeFromRight (28));
+    tools.removeFromRight (4);
+    zoomOutButton.setBounds (tools.removeFromRight (28));
+    roll.removeFromTop (4);
+    pianoRoll.setBounds (roll);
+}
