@@ -310,8 +310,14 @@ bool readMidiFile (const std::vector<uint8_t>& d, ParsedMidi& out, std::string& 
                 }
                 if (l > end - p) { error = "Meta truncado"; return false; }
                 if (type == 0x01) out.texts.push_back ({ tick, std::string ((const char*) &d[p], l) });
-                if (type == 0x51 && l == 3) out.bpm = 60000000.0 / (double) ((d[p] << 16) | (d[p + 1] << 8) | d[p + 2]);
-                if (type == 0x58 && l == 4) { out.tsNumerator = d[p]; out.tsDenominator = 1 << d[p + 1]; }
+                if (type == 0x51 && l == 3)
+                {
+                    // Un tempo de 0 microsegundos por negra daría BPM infinito: se ignora.
+                    const uint32_t usPerQuarter = ((uint32_t) d[p] << 16) | ((uint32_t) d[p + 1] << 8) | d[p + 2];
+                    if (usPerQuarter > 0) out.bpm = 60000000.0 / (double) usPerQuarter;
+                }
+                // El denominador es una potencia de 2; exponentes > 6 (1/64) son inválidos y desbordarían el desplazamiento.
+                if (type == 0x58 && l == 4 && d[p] > 0 && d[p + 1] <= 6) { out.tsNumerator = d[p]; out.tsDenominator = 1 << d[p + 1]; }
                 if (type == 0x03 && out.trackName.empty()) out.trackName.assign ((const char*) &d[p], l);
                 if (type == 0x2F) sawEnd = true;
                 p += l;

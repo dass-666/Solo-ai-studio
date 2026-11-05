@@ -44,6 +44,19 @@ void operator delete (void* p) noexcept { std::free (p); }
 void operator delete[] (void* p) noexcept { std::free (p); }
 void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
+// Variantes nothrow: deben usar el mismo par malloc/free (lo exige AddressSanitizer).
+void* operator new (std::size_t n, const std::nothrow_t&) noexcept
+{
+    if (g_track.load (std::memory_order_relaxed)) g_allocs.fetch_add (1, std::memory_order_relaxed);
+    return std::malloc (n ? n : 1);
+}
+void* operator new[] (std::size_t n, const std::nothrow_t&) noexcept
+{
+    if (g_track.load (std::memory_order_relaxed)) g_allocs.fetch_add (1, std::memory_order_relaxed);
+    return std::malloc (n ? n : 1);
+}
+void operator delete (void* p, const std::nothrow_t&) noexcept { std::free (p); }
+void operator delete[] (void* p, const std::nothrow_t&) noexcept { std::free (p); }
 
 namespace
 {
@@ -405,6 +418,26 @@ TEST (midi_reader_survives_fuzzing)
     }
     std::printf ("  3000 ficheros MIDI corruptos: %d leídos sin error, el resto rechazados (sin fallos de memoria)\n", ok);
     CHECK (true);
+}
+
+// Defecto encontrado por UBSan: metaevento de compás con exponente de denominador 183 -> desplazamiento
+// indefinido (1 << 183). Y tempo de 0 us/negra -> BPM infinito. Ambos deben ignorarse sin romper la lectura.
+TEST (midi_reader_rejects_bad_timesig_and_tempo)
+{
+    auto be32 = [] (std::vector<uint8_t>& v, uint32_t x) { for (int s = 24; s >= 0; s -= 8) v.push_back ((uint8_t) (x >> s)); };
+    std::vector<uint8_t> trk = { 0x00, 0xFF, 0x58, 0x04, 0x04, 183, 24, 8,      // compás 4/2^183
+                                 0x00, 0xFF, 0x51, 0x03, 0x00, 0x00, 0x00,       // tempo 0
+                                 0x00, 0x90, 60, 100, 0x60, 0x80, 60, 0,
+                                 0x00, 0xFF, 0x2F, 0x00 };
+    std::vector<uint8_t> d = { 'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0x03, 0xC0, 'M', 'T', 'r', 'k' };
+    be32 (d, (uint32_t) trk.size());
+    d.insert (d.end(), trk.begin(), trk.end());
+    ParsedMidi pm;
+    std::string err;
+    CHECK (readMidiFile (d, pm, err));
+    CHECK (std::isfinite (pm.bpm) && pm.bpm == 0.0);   // 0 = "no especificado": el tempo inválido se ignora
+    CHECK (pm.tsDenominator == 0);                      // 0 = "no especificado": el compás inválido se ignora
+    CHECK (pm.notes.size() == 1);
 }
 
 // ============================================================ estado v2
