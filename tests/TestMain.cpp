@@ -186,7 +186,8 @@ static std::vector<Scenario> scenarios()
             for (int st = 0; st < kNumStyles; ++st)
             {
                 const int ts = (i % 3 == 0) ? 3 : 4;
-                const int bars = (int[]) { 2, 4, 8, 16 }[i % 4];
+                static const int kBarsOpts[] = { 2, 4, 8, 16 };
+                const int bars = kBarsOpts[i % 4];
                 const double e = (i % 5) / 4.0, d = ((i + 2) % 5) / 4.0, c = ((i + 4) % 5) / 4.0;
                 v.push_back ({ pr[0], pr[1], ts, bars, (InstrumentId) ins, (Style) st, e, d, c, 70.0 + (i * 13) % 120 });
                 ++i;
