@@ -70,3 +70,44 @@ Síntesis ligera, sin samples (nada que licenciar). **No son instrumentos acúst
 
 Preparado para S3+: `InstrumentEngine` recibe eventos con offset; sustituirlo por un reproductor de samples no
 cambia el resto. `Note` puede ampliarse con pitch bend / CC.
+
+---
+
+# Arquitectura v2 (desarrollo avanzado)
+
+```
+            ┌──────────────── hilo de mensajes ────────────────┐        ┌──── hilo de audio ────┐
+ Interfaz ─►│ ProjectController (operaciones + deshacer)        │        │                       │
+ Comandos ─►│   ├─ SoloComposer: motor 1 (S0–S2) / motor 2      │ publish│ SoloEngine::process   │
+ Voz WAV  ─►│   │    plan → frases → motivos → alturas          │───────►│  transporte/preview   │
+            │   ├─ Performer (articulaciones, perfil)           │ (lock- │  SoloPlayer (eventos) │
+            │   ├─ VoiceAnalysis / humToSolo / CreativeDNA      │  free) │  InstrumentEngine     │
+            │   └─ SoloState (v2) ── serialize ──► host/.flp    │        │  EffectsChain + autom.│
+            └───────────────────────────────────────────────────┘        └───────────────────────┘
+                     │ renderWithEngine (offline) usa el MISMO SoloEngine → WAV idéntico a lo que suena
+```
+
+## Decisiones v2 y motivo
+
+- **Un único motor de audio (`SoloEngine`)** para el plugin y la exportación. Antes había dos caminos y diferían
+  en -14,6 dB; ahora la prueba `engine_live_matches_export` exige igualdad y la diferencia medida es nula.
+- **Compositor y intérprete separados.** El compositor decide qué notas; el intérprete (`Performer`) decide cómo
+  se tocan (bends, vibrato, slides, legato, palm mute, ataque), según un perfil y los límites físicos del
+  instrumento. Así se puede cambiar el estilo de interpretación sin recomponer, y probar cada parte por separado.
+- **Motor 1 conservado.** Los proyectos S0–S2 (estado v1) se abren con el motor 1 y suenan igual (golden hash).
+- **`ProjectController` en el núcleo.** Todas las ediciones (generar, bloquear, A/B, efectos, voz, ADN, comandos)
+  son operaciones con deshacer, sin JUCE. El plugin, el CLI y los comandos usan exactamente las mismas, y las
+  pruebas del núcleo las cubren. El procesador del plugin solo toma un lock, ejecuta la operación y republica.
+- **Efectos propios, sin respuestas al impulso ni samples:** nada que licenciar. Son aproximaciones digitales
+  sencillas, no emulaciones de equipos concretos. Presets calibrados a ~-18 LUFS para que comparar presets no
+  sea comparar volúmenes.
+- **Flush-to-zero dentro del motor:** no se depende de que el host lo active (la exportación WAV corre en el
+  hilo de mensajes, donde JUCE no lo activa).
+- **Voz:** YIN a 16 kHz, segmentación por energía y por cambio sostenido de altura, sin modelos descargados.
+  Solo se ha validado con voces sintéticas; es la parte con más riesgo frente a voces reales.
+- **Dirección por voz en etapas** (`Commands.h`): reconocimiento (interfaz vacía) → interpretación por reglas en
+  español → operaciones estructuradas → vista previa sobre una copia → ejecución → deshacer. Se añadirá un
+  reconocedor local (p. ej. whisper.cpp con un modelo pequeño) solo si Diego lo aprueba: implica descargar un
+  modelo y revisar su licencia.
+- **Sin parámetros de host nuevos:** solo Volumen es automatizable desde el DAW; la automatización de efectos
+  vive en el proyecto (curvas por compás), para no depender de cómo cada DAW maneja cientos de parámetros.

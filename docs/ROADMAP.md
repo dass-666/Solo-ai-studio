@@ -1,26 +1,29 @@
-# Propuesta S3–S6 (priorizada)
+# Hoja de ruta tras v2 (priorizada)
 
-Criterio: primero lo que desbloquea el uso real en FL Studio; después calidad musical; al final lo caro.
+Criterio: primero lo que convierte el trabajo hecho en uso real; después calidad; al final lo caro.
 
-## S3 — Validación real y robustez (prioridad máxima, coste bajo)
-- Ejecutar la checklist de `INSTALL.md` en FL Studio 24 y corregir lo que falle.
-- Deshacer/rehacer, selección múltiple, copiar/pegar en el piano roll.
-- Medir CPU y latencia de interfaz; pluginval en nivel 10 sin fallos.
-- Decidir licencia (JUCE comercial vs AGPL) y firmar el binario. **Sin esto no se debe distribuir.**
+## 1. Validación en FL Studio 24 (máxima prioridad, coste bajo, requiere a Diego)
+- Ejecutar los pasos de prueba del informe v2: carga, transporte, `.flp`, exportación, MIDI en el Piano Roll, CPU real.
+- Probar Hum-to-Solo con 3–5 grabaciones reales de voz (tarareo, silbido, «la-la») y anotar aciertos.
+- Escucha comparativa de las 7 demos A/B (es la primera evaluación humana del proyecto).
+- **Sin esto, cualquier nueva función añade riesgo sin evidencia de valor.**
 
-## S4 — Expresividad y armonía (valor alto, coste medio)
-- Bends, slides, vibrato por nota y hammer-on/pull-off en guitarra (pitch bend + CC en `Note` y en la exportación).
-- Acordes a mitad de compás, acordes extendidos, modos (dórico, mixolidio) y escalas por acorde.
-- Perfiles de estilo más ricos (frases-tipo de blues, rock melódico, fusión) y control de "contorno" dibujable.
+## 2. Correcciones según lo que salga de FL (coste según hallazgos)
+- Ventana/redimensionado en el wrapper de FL, foco del teclado (atajos de deshacer), diálogos de archivo.
 
-## S5 — Sonido (valor alto para vender, coste medio-alto)
-- Motor de samples con bibliotecas de licencia redistribuible verificada (o grabación propia).
-- Articulaciones y round-robin. Mantener la síntesis actual como opción ligera.
+## 3. Calidad musical (valor alto, coste medio)
+- Más recurrencia de motivos (hoy 0,033): reutilizar motivos de forma explícita por sección.
+- Acordes a mitad de compás y escalas por acorde (modos).
+- Pitch bend en la salida MIDI en directo.
 
-## S6 — IA entrenada (solo si S3–S5 demuestran demanda; coste alto)
-- Modelo pequeño, local y offline (p. ej. transformer de pocos MB vía ONNX Runtime) que proponga motivos,
-  manteniendo el compositor de reglas como "guardarraíl" armónico y rítmico.
-- Requiere un dataset con derechos claros: es el mayor riesgo legal y de coste. No empezar sin resolverlo.
-- Alternativa más barata: aprender estilo a partir de MIDI que importe el propio usuario.
+## 4. Voz (valor alto, coste medio, riesgo de calidad)
+- Grabación desde el micrófono dentro del plugin (hoy: grabar en el DAW e importar el WAV).
+- Reconocimiento de órdenes habladas con un modelo local pequeño (p. ej. whisper.cpp «tiny/base», ~75–150 MB).
+  **Decisión de Diego:** tamaño de descarga, licencia del modelo (MIT en whisper.cpp; revisar pesos) y si aporta
+  valor frente a escribir la orden.
 
-Recomendación: no empezar S4 hasta cerrar S3 en FL Studio real.
+## 5. Sonido (valor alto para vender, coste medio-alto)
+- Samples con licencia redistribuible verificada o grabación propia; mantener la síntesis como opción ligera.
+
+## 6. Distribución (bloqueante para vender)
+- Licencia JUCE (comercial o AGPLv3), firma de código, instalador. Decisión de negocio de Diego.
