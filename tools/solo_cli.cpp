@@ -11,6 +11,7 @@
 //   solo_cli command "<orden>"              interpreta una orden en español (vista previa)
 #include "solo/Analysis.h"
 #include "solo/AudioRenderer.h"
+#include "solo/BeatAnalyzer.h"
 #include "solo/Commands.h"
 #include "solo/MidiFile.h"
 #include "solo/Project.h"
@@ -294,6 +295,87 @@ int cmdHum (int argc, char** argv)
         std::printf ("%s: %zu notas%s -> %s.mid/.wav\n", humModeName (o.mode), res.sequence.notes.size(),
                      res.usedRhythmOnly ? " (solo ritmo)" : "", prefix.c_str());
     }
+    return 0;
+}
+
+// V4-A: analizar un beat WAV (offline) e imprimir tempo, tonalidad, acordes y regiones con sus confianzas.
+int cmdBeat (int argc, char** argv)
+{
+    if (argc < 3) return 2;
+    auto a = parseArgs (argc, argv, 3);
+    auto get = [&] (const char* k, const char* def) { auto it = a.find (k); return it == a.end() ? std::string (def) : it->second; };
+    BeatAnalysisOptions o;
+    o.beatsPerBar = std::atoi (get ("ts", "4").c_str());
+    o.minBpm = std::atof (get ("min", "60").c_str());
+    o.maxBpm = std::atof (get ("max", "200").c_str());
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto r = analyseBeatFile (argv[2], o);
+    const double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+    if (! r.ok) { std::fprintf (stderr, "Error: %s\n", r.error.c_str()); return 1; }
+    std::printf ("Archivo: %.1f s, %.0f Hz, %d canal(es), pico %.1f dBFS, RMS %.1f dBFS (análisis: %.0f ms)\n",
+                 r.durationSec, r.sampleRate, r.sourceChannels, r.peakDb, r.rmsDb, ms);
+    std::printf ("Resumen: %s\n", r.summary().c_str());
+    if (r.silent) return 0;
+    std::printf ("Tempo (estimado): %.2f BPM, confianza %.2f, primer pulso %.3f s, %zu pulsos, %d compases de %d\n",
+                 r.bpm, r.bpmConfidence, r.firstBeatSec, r.beatsSec.size(), r.bars, r.beatsPerBar);
+    for (const auto& c : r.bpmCandidates) std::printf ("  candidato %.2f BPM (puntuación %.2f)\n", c.bpm, c.score);
+    if (r.tonal)
+    {
+        std::printf ("Tonalidad (estimada): %s, confianza %.2f\n", r.key.toString().c_str(), r.keyConfidence);
+        for (const auto& k : r.keyCandidates) std::printf ("  candidata %s (correlación %.3f)\n", k.key.toString().c_str(), k.score);
+        if (! r.harmony.empty())
+        {
+            std::printf ("Acordes por compás (estimados, confianza media %.2f):\n", r.chordConfidence);
+            for (const auto& seg : r.harmony.segments)
+                std::printf ("  compás %d-%d: %s (confianza %.2f)\n", seg.startBar + 1, seg.startBar + seg.lengthBars, seg.chord.toString (r.key.prefersFlats()).c_str(), seg.confidence);
+            std::printf ("Cambios armónicos en compases:");
+            for (int b : r.harmonicChanges) std::printf (" %d", b + 1);
+            std::printf ("\n");
+        }
+        if (! r.chordEvents.empty())
+        {
+            std::printf ("Acordes por tiempo:\n");
+            for (const auto& e : r.chordEvents) std::printf ("  %.2f-%.2f s: %s (confianza %.2f)\n", e.startSec, e.endSec, e.chord.toString (r.key.prefersFlats()).c_str(), e.confidence);
+        }
+    }
+    else std::printf ("Sin contenido tonal fiable (beat percusivo): tonalidad y acordes a mano.\n");
+    std::printf ("Regiones de energía:\n");
+    for (const auto& e : r.energyRegions)
+        std::printf ("  compás %d-%d (%.1f-%.1f s): %s, %.1f dBFS\n", e.startBar + 1, e.endBar, e.startSec, e.endSec,
+                     e.level == EnergyLevel::Low ? "baja" : e.level == EnergyLevel::High ? "alta" : "media", e.rmsDb);
+    for (const auto& w : r.warnings) std::printf ("Aviso: %s\n", w.c_str());
+    const std::string out = get ("out", "");
+    if (! out.empty())
+    {
+        std::ofstream f (out);
+        f << serializeBeatAnalysis (r);
+        std::printf ("-> %s\n", out.c_str());
+    }
+    return 0;
+}
+
+// V4-A: beat sintético con BPM y tonalidad conocidos (pruebas manuales y demos).
+int cmdSynthBeat (int argc, char** argv)
+{
+    if (argc < 3) return 2;
+    auto a = parseArgs (argc, argv, 3);
+    auto get = [&] (const char* k, const char* def) { auto it = a.find (k); return it == a.end() ? std::string (def) : it->second; };
+    SyntheticBeatSpec s;
+    s.bpm = std::atof (get ("bpm", "120").c_str());
+    Key::parse (get ("key", "Am"), s.key);
+    s.progression = get ("prog", "Am F C G");
+    s.bars = std::atoi (get ("bars", "8").c_str());
+    s.beatsPerBar = std::atoi (get ("ts", "4").c_str());
+    s.sampleRate = std::atof (get ("sr", "44100").c_str());
+    s.drums = get ("drums", "1") != "0";
+    s.harmony = get ("harmony", "1") != "0";
+    s.noiseDb = std::atof (get ("noise", "-70").c_str());
+    s.swingSec = std::atof (get ("swing", "0").c_str());
+    s.leadInSec = std::atof (get ("leadin", "0").c_str());
+    s.seed = std::strtoull (get ("seed", "1").c_str(), nullptr, 10);
+    const auto audio = synthesiseBeat (s);
+    if (! writeWavFile (argv[2], audio, std::atoi (get ("channels", "1").c_str()))) { std::fprintf (stderr, "No se pudo escribir %s\n", argv[2]); return 1; }
+    std::printf ("Beat sintético: %.1f BPM, %s, %s, %d compases, %.1f s -> %s\n", s.bpm, s.key.toString().c_str(), s.progression.c_str(), s.bars, audio.durationSec(), argv[2]);
     return 0;
 }
 
@@ -593,6 +675,8 @@ int main (int argc, char** argv)
     if (argc >= 3 && std::strcmp (argv[1], "demos") == 0) return cmdDemos (argv[2]);
     if (argc >= 4 && std::strcmp (argv[1], "hum") == 0) return cmdHum (argc, argv);
     if (argc >= 3 && std::strcmp (argv[1], "synthvoice") == 0) return cmdSynthVoice (argv[2]);
+    if (argc >= 3 && std::strcmp (argv[1], "beat") == 0) return cmdBeat (argc, argv);
+    if (argc >= 3 && std::strcmp (argv[1], "synthbeat") == 0) return cmdSynthBeat (argc, argv);
     if (argc >= 2 && std::strcmp (argv[1], "bench") == 0) return cmdBench();
     if (argc >= 3 && std::strcmp (argv[1], "tone-ab") == 0) return cmdToneAb (argc, argv);
     if (argc >= 3 && std::strcmp (argv[1], "makebank") == 0) return cmdMakeBank (argv[2]);
@@ -609,6 +693,9 @@ int main (int argc, char** argv)
                  "                   [--plan \"P2 D2 T2 C1 R1\"] [--fx \"Emotional Lead\"|none] [--seed 1] [--out solo]\n"
                  "  solo_cli demos <carpeta>\n  solo_cli examples <carpeta>\n"
                  "  solo_cli hum <voz.wav> <carpeta> [--key Am] [--prog \"Am F C G\"] [--bpm 100] [--bars 8]\n"
-                 "  solo_cli synthvoice <salida.wav>\n  solo_cli bench\n  solo_cli tone-ab <carpeta> [--expression 65]   demos v2/v3 con el mismo MIDI a -18 LUFS\n  solo_cli makebank <carpeta>                    banco SFZ sintético de prueba\n  solo_cli calibrate\n  solo_cli command \"<orden en español>\"\n");
+                 "  solo_cli synthvoice <salida.wav>\n"
+                 "  solo_cli beat <beat.wav> [--ts 4] [--min 60] [--max 200] [--out analisis.txt]   análisis offline del beat (V4)\n"
+                 "  solo_cli synthbeat <salida.wav> [--bpm 120] [--key Am] [--prog \"Am F C G\"] [--bars 8] [--drums 0|1] [--harmony 0|1] [--noise -70] [--swing 0.02] [--leadin 0] [--sr 44100] [--channels 1|2]\n"
+                 "  solo_cli bench\n  solo_cli tone-ab <carpeta> [--expression 65]   demos v2/v3 con el mismo MIDI a -18 LUFS\n  solo_cli makebank <carpeta>                    banco SFZ sintético de prueba\n  solo_cli calibrate\n  solo_cli command \"<orden en español>\"\n");
     return 1;
 }

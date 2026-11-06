@@ -2,6 +2,7 @@
 // StateManager: persistencia versionada del proyecto (ajustes, variaciones, efectos, automatización,
 // bloqueos, A/B y material temático). Formato de texto legible, validado al cargar.
 // Un estado inválido nunca se aplica a medias. Lee estados v1 (S0–S2) y los migra.
+#include "solo/BeatAnalyzer.h"
 #include "solo/Effects.h"
 #include "solo/SoloComposer.h"
 #include "solo/SoloEngine.h"
@@ -66,6 +67,7 @@ struct SoloState
     uint32_t slotA = 0, slotB = 0;       // ids de variación para comparar A/B (0 = vacío)
     std::vector<SeedMotif> seedMotifs;   // material temático (Creative DNA / voz)
     std::string dnaSummary;              // descripción legible del ADN extraído
+    BeatProject beat;                    // V4: beat importado (análisis + armonía editable); vacío si no hay
     int loadedFromVersion = kVersion;    // informativo (no se serializa)
 };
 

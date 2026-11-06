@@ -291,6 +291,7 @@ std::string serializeState (const SoloState& s)
     o << "\n";
     o << "ab=" << s.slotA << " " << s.slotB << "\n";
     o << "dna=" << oneLine (s.dnaSummary) << "\n";
+    if (s.beat.loaded()) o << serializeBeatProject (s.beat);
     for (const auto& lane : s.automation.lanes)
     {
         o << "auto " << (int) lane.target << " " << (lane.enabled ? 1 : 0) << " " << fmt (lane.smoothingMs) << " "
@@ -350,6 +351,7 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
     int wantedVariations = 0, currentIdx = -1;
     uint32_t nextId = 0;
     bool sawEnd = false;
+    std::string beatText; // líneas beat.* / harm.* (V4), se interpretan al final
     for (size_t li = 1; li < ls.size(); ++li)
     {
         const auto& l = ls[li];
@@ -472,7 +474,18 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
             continue;
         }
         if (key == "dna") { s.dnaSummary = val; continue; }
+        if (key.rfind ("beat.", 0) == 0 || key.rfind ("harm.", 0) == 0 || key == "beatPath" || key == "beatSection")
+        {
+            beatText += l; beatText += '\n';
+            continue;
+        }
         if (! applySetting (s.settings, key, val, error, version)) return false;
+    }
+    if (! beatText.empty())
+    {
+        std::string berr;
+        BeatProject bp;
+        if (deserializeBeatProject (beatText, bp, berr)) s.beat = bp; // un beat ilegible no invalida el proyecto
     }
     if (! sawEnd) { error = "Estado truncado (falta 'end')"; return false; }
     if ((int) items.size() != wantedVariations) { error = "Número de variaciones inconsistente"; return false; }

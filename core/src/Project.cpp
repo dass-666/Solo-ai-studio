@@ -1,5 +1,6 @@
 #include "solo/Project.h"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 
 namespace solo
@@ -529,6 +530,120 @@ OpResult ProjectController::setSfzPath (const std::string& path)
     r.ok = true;
     r.rigChanged = r.settingsChanged = true;
     r.message = path.empty() ? "Sin biblioteca de samples" : "Biblioteca SFZ: " + path;
+    return r;
+}
+
+// ---------------------------------------------------------------- beat (V4-A)
+OpResult ProjectController::importBeat (const MonoAudio& audio, const std::string& path, const BeatAnalysisOptions& o)
+{
+    BeatProject b;
+    b.path = path;
+    b.analysis = analyseBeat (audio, o);
+    if (! b.analysis.ok) return OpResult::fail ("No se pudo analizar el beat: " + b.analysis.error);
+    if (b.analysis.silent) return OpResult::fail ("El archivo está en silencio: no hay beat que analizar");
+    b.harmony = b.analysis.harmony;
+    if (b.harmony.empty())
+    {
+        // Sin acordes fiables: línea armónica vacía de acordes pero con tempo/compases, para que el usuario los escriba.
+        b.harmony.bpm = b.analysis.bpm > 0 ? b.analysis.bpm : state.settings.manualBpm;
+        b.harmony.bpmConfidence = b.analysis.bpmConfidence;
+        b.harmony.beatsPerBar = b.analysis.beatsPerBar;
+        b.harmony.bars = b.analysis.bars;
+        if (b.analysis.tonal) { b.harmony.key = b.analysis.key; b.harmony.keyConfidence = b.analysis.keyConfidence; }
+    }
+    b.sectionFromBar = 0; b.sectionToBar = -1;
+    state.beat = b;
+    OpResult r;
+    r.ok = true;
+    r.settingsChanged = true;
+    r.message = "Beat importado: " + b.analysis.summary();
+    for (const auto& w : b.analysis.warnings) r.message += "\n· " + w;
+    return r;
+}
+
+OpResult ProjectController::clearBeat()
+{
+    state.beat = BeatProject {};
+    OpResult r; r.ok = true; r.settingsChanged = true; r.message = "Beat quitado: el compositor usa los acordes manuales";
+    return r;
+}
+
+OpResult ProjectController::confirmBeatBpm (double bpm)
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    if (! (bpm >= 20 && bpm <= 400)) return OpResult::fail ("BPM fuera de rango (20-400)");
+    state.beat.harmony.setBpm (bpm, Provenance::Confirmed);
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    char buf[64]; std::snprintf (buf, sizeof (buf), "BPM confirmado: %.1f", bpm); r.message = buf;
+    return r;
+}
+
+OpResult ProjectController::confirmBeatKey (const Key& k)
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    state.beat.harmony.setKey (k, Provenance::Confirmed);
+    OpResult r; r.ok = true; r.settingsChanged = true; r.message = "Tonalidad confirmada: " + k.toString();
+    return r;
+}
+
+OpResult ProjectController::setBeatChord (int fromBar, int toBar, const Chord& c)
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    auto& h = state.beat.harmony;
+    if (h.bars <= 0) return OpResult::fail ("El beat no tiene compases detectados: escribe la progresión completa");
+    if (fromBar < 0 || toBar < fromBar || toBar >= h.bars) return OpResult::fail ("Compases fuera del beat");
+    h.setChord (fromBar, toBar, c, Provenance::Confirmed);
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    r.message = "Acorde " + c.toString (h.key.prefersFlats()) + " en compases " + std::to_string (fromBar + 1) + "-" + std::to_string (toBar + 1);
+    return r;
+}
+
+OpResult ProjectController::setBeatChords (const Progression& p)
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    if (p.bars.empty()) return OpResult::fail ("Progresión vacía");
+    auto& h = state.beat.harmony;
+    const int bars = h.bars > 0 ? h.bars : std::max (state.beat.analysis.bars, (int) p.bars.size());
+    Progression full;
+    for (int b = 0; b < bars; ++b) full.bars.push_back (p.bars[(size_t) b % p.bars.size()]); // se repite hasta cubrir el beat
+    const HarmonyTimeline manual = HarmonyTimeline::fromManual (h.key, full, h.bpm, h.beatsPerBar);
+    h.segments = manual.segments; h.bars = bars;
+    OpResult r; r.ok = true; r.settingsChanged = true; r.message = "Acordes manuales: " + p.toString (h.key.prefersFlats());
+    return r;
+}
+
+OpResult ProjectController::setBeatSection (int fromBar, int toBar)
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    const int total = std::max (state.beat.harmony.bars, state.beat.analysis.bars);
+    if (fromBar < 0 || fromBar >= std::max (1, total) || (toBar >= 0 && toBar < fromBar)) return OpResult::fail ("Sección fuera del beat");
+    state.beat.sectionFromBar = fromBar; state.beat.sectionToBar = toBar;
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    r.message = "Sección: compases " + std::to_string (fromBar + 1) + "-" + std::to_string ((toBar < 0 ? total : toBar + 1));
+    return r;
+}
+
+OpResult ProjectController::applyBeatToSettings()
+{
+    if (! hasBeat()) return OpResult::fail ("No hay beat importado");
+    const auto& b = state.beat;
+    const auto& h = b.harmony;
+    if (h.segments.empty()) return OpResult::fail ("El beat no tiene acordes (ni detectados ni manuales): escríbelos primero");
+    const int total = h.bars;
+    const int from = std::max (0, std::min (b.sectionFromBar, total - 1));
+    const int to = b.sectionToBar < 0 ? total - 1 : std::min (b.sectionToBar, total - 1);
+    Progression p;
+    for (int bar = from; bar <= to; ++bar) p.bars.push_back (h.chordAtBar (bar));
+    if (p.bars.empty()) return OpResult::fail ("La sección no tiene compases");
+    state.settings.keyText = h.key.toString();
+    state.settings.progressionText = p.toString (h.key.prefersFlats());
+    state.settings.bars = (int) p.bars.size();
+    state.settings.tsNumerator = h.beatsPerBar;
+    state.settings.manualBpm = h.bpm;
+    state.settings.useHostTempo = false;
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    char buf[96]; std::snprintf (buf, sizeof (buf), "Compositor ajustado al beat: %s, %.1f BPM, %d compases", h.key.toString().c_str(), h.bpm, (int) p.bars.size());
+    r.message = buf;
     return r;
 }
 

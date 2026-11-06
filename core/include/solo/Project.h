@@ -77,6 +77,16 @@ public:
     OpResult applyVocalCorrection (const VoiceAnalysis& take, const HumToSoloOptions& o, int fromBar, int toBar);
     OpResult extractDNAFromCurrent();
     OpResult generateFromDNA (const DerivedOptions& o, uint64_t seed);
+    // ---- beat (V4-A). importBeat ejecuta el análisis: nunca desde el hilo de audio.
+    OpResult importBeat (const MonoAudio& audio, const std::string& path, const BeatAnalysisOptions& o = {});
+    OpResult clearBeat();
+    OpResult confirmBeatBpm (double bpm);                  // el usuario fija el tempo
+    OpResult confirmBeatKey (const Key& k);                // el usuario fija la tonalidad
+    OpResult setBeatChord (int fromBar, int toBar, const Chord& c); // acorde confirmado a mano
+    OpResult setBeatChords (const Progression& p);         // toda la progresión a mano (beat percusivo o análisis dudoso)
+    OpResult setBeatSection (int fromBar, int toBar);      // sección sobre la que se compone (-1 = hasta el final)
+    OpResult applyBeatToSettings();                        // copia BPM/tonalidad/acordes de la sección a los ajustes del compositor
+    bool hasBeat() const { return state.beat.loaded(); }
     // ---- deshacer
     OpResult undoLast();
     OpResult redoLast();
