@@ -4,6 +4,7 @@
 // Las etapas hasta el filtro son mono (el instrumento es una voz solista mono); desde el chorus, estéreo.
 // Los modelos son aproximaciones digitales sencillas (waveshaping + filtros), NO emulaciones de equipos concretos.
 #include "solo/Dsp.h"
+#include "solo/GuitarAmp.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -42,6 +43,19 @@ struct FxSettings
     // Salida
     float outputDb = 0.0f;
     bool limiter = true;
+
+    // ---- Guitar Tone Studio v3 (ampModel = 1 sustituye overdrive/distorsión/ampli/pantalla por GuitarAmp;
+    //      las etapas siguen activándose con 'enabled' y odDrive/odTone/distGain/distTone/ampBass.../cabType se reutilizan)
+    int ampModel = 0;             // 0 = cadena v2 (bit a bit igual que antes), 1 = Tone Studio v3
+    float ampPreGainDb = 14.4f;   // ganancia previa (la macro Fuerza la fija: 2 + 22·(F/100)^1.6)
+    int ampSatType = 0;           // 0 válvula, 1 alta ganancia, 2 limpio
+    int ampOversample = 2;        // 1, 2, 4
+    float ampPresenceDb = 2.0f, ampCompression = 0.3f, ampSag = 0.3f, ampTrimDb = 0.0f, ampOutputLpHz = 8000.0f;
+    std::string cabIrPath;        // IR de pantalla del usuario (vacío = modelo por cabType)
+    // Ambiente v3
+    // Valores neutros por defecto (los presets v2 suenan bit a bit igual que antes): 20 Hz / 20 kHz = sin filtro.
+    float reverbPredelayMs = 0.0f, reverbLowCutHz = 20.0f, reverbHighCutHz = 20000.0f, delayLowCutHz = 20.0f;
+    float ambienceWidth = 1.0f;   // anchura estéreo de delay+reverb (0 = mono, 1 = normal)
 
     bool isOn (FxStage s) const { return enabled[(size_t) s]; }
     void setOn (FxStage s, bool on) { enabled[(size_t) s] = on; }
@@ -113,6 +127,12 @@ public:
 
     // Segundos aproximados hasta que la cola (delay + reverb) cae por debajo de -60 dB.
     static double tailSeconds (const FxSettings& s, double bpm);
+    // v3: IR de pantalla publicada por el hilo de mensajes (puntero vigente mientras no se publique otra).
+    void setImpulse (const CabImpulse* ir) { impulse = ir; }
+    // Latencia (muestras) que introduce la cadena con los ajustes actuales (sobremuestreo del ampli v3).
+    static int latencySamples (const FxSettings& s);
+    // Parámetros del ampli v3 derivados de los ajustes.
+    static AmpParams ampParamsFor (const FxSettings& s);
 
 private:
     struct Comb { std::vector<float> buf; int pos = 0; float store = 0; };
@@ -150,6 +170,13 @@ private:
     // Reverb
     std::array<Comb, 8> combL, combR;
     std::array<Allpass, 4> apL, apR;
+    std::vector<float> predelayBuf;
+    int predelayPos = 0;
+    dsp::Biquad revLowCut, revHighCutL, revHighCutR, delayLowCutL, delayLowCutR;
+
+    // v3
+    GuitarAmp amp;
+    const CabImpulse* impulse = nullptr;
 
     // Parámetros suavizados
     dsp::Smoothed sDrive, sDelayMix, sReverbMix, sCutoff, sVolume, sChorusMix, sDistGain;

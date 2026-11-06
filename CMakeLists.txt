@@ -27,6 +27,10 @@ add_library(solo_core STATIC
     core/src/Performer.cpp
     core/src/InstrumentEngine.cpp
     core/src/Effects.cpp
+    core/src/Expression.cpp
+    core/src/GuitarAmp.cpp
+    core/src/ModeledGuitarEngine.cpp
+    core/src/Sampler.cpp
     core/src/SoloEngine.cpp
     core/src/Playback.cpp
     core/src/AudioRenderer.cpp
@@ -53,7 +57,7 @@ endif()
 
 if(SOLO_BUILD_TESTS)
     enable_testing()
-    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp tests/TestTransport.cpp)
+    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp tests/TestTransport.cpp tests/TestTone.cpp)
     target_link_libraries(solo_tests PRIVATE solo_core)
     if(MSVC)
         target_compile_options(solo_tests PRIVATE /utf-8)

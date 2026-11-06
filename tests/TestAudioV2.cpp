@@ -24,11 +24,9 @@ using namespace solo;
 // ---------------------------------------------------------------- contador de reservas de memoria
 // Se sustituye el operator new global del ejecutable de pruebas. Solo cuenta mientras g_track está activo
 // (es decir, dentro de SoloEngine::process), así que mide exactamente lo que hace el hilo de audio.
-namespace
-{
+// Compartidos con TestTone.cpp (extern).
 std::atomic<bool> g_track { false };
 std::atomic<long> g_allocs { 0 };
-} // namespace
 
 void* operator new (std::size_t n)
 {

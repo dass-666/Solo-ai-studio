@@ -4,11 +4,24 @@
 
 namespace solo
 {
+const char* guitarEngineName (GuitarEngineKind k)
+{
+    switch (k)
+    {
+        case GuitarEngineKind::LegacyV2: return "Guitarra v2 (anterior)";
+        case GuitarEngineKind::Modeled: return "Guitarra modelada v3";
+        case GuitarEngineKind::Samples: return "Guitarra con samples (SFZ)";
+    }
+    return "?";
+}
+
 SoloEngine::SoloEngine()
 {
     eventScratch.resize ((size_t) kMaxEvents);
+    monoScratch.resize (16384);
     fxSwap.publish (std::make_unique<FxSettings>());
     autoSwap.publish (std::make_unique<AutomationSet>());
+    rigSwap.publish (std::make_unique<GuitarRigSettings>());
     autoHold.fill (-1.0f);
 }
 
@@ -17,18 +30,33 @@ void SoloEngine::prepare (double sr, int maxBlockSize)
     sampleRate = sr > 0 ? sr : 48000.0;
     instrument.prepare (sampleRate);
     instrument.setOutputGain (1.0f);
+    modeled.prepare (sampleRate);
+    sampler.prepare (sampleRate);
+    if ((int) monoScratch.size() < maxBlockSize) monoScratch.resize ((size_t) maxBlockSize);
     fx.prepare (sampleRate, maxBlockSize);
     player.reset();
     gainSmoothed.reset (outputGain.load());
     autoHoldValid = false;
+    lastSource = -1;
 }
 
 void SoloEngine::publishFx (const FxSettings& s)
 {
     auto p = std::make_unique<FxSettings> (s);
     p->sanitise();
+    publishedLatency = EffectsChain::latencySamples (*p);
     fxSwap.publish (std::move (p));
 }
+
+void SoloEngine::publishRig (const GuitarRigSettings& r)
+{
+    auto p = std::make_unique<GuitarRigSettings> (r);
+    p->guitar.sanitise();
+    rigSwap.publish (std::move (p));
+}
+
+void SoloEngine::publishSampleBank (SharedBank bank) { bankSwap.publish (std::make_unique<SharedBank> (std::move (bank))); }
+void SoloEngine::publishImpulse (SharedImpulse ir) { irSwap.publish (std::make_unique<SharedImpulse> (std::move (ir))); }
 
 void SoloEngine::publishAutomation (const AutomationSet& a)
 {
@@ -42,6 +70,9 @@ void SoloEngine::collectGarbage()
     playback.collectGarbage();
     fxSwap.collectGarbage();
     autoSwap.collectGarbage();
+    rigSwap.collectGarbage();
+    bankSwap.collectGarbage();
+    irSwap.collectGarbage();
 }
 
 bool SoloEngine::publishSequenceIfChanged (const Sequence* seq, int64_t startOffsetTicks, bool loop)
@@ -124,7 +155,54 @@ SoloEngine::BlockResult SoloEngine::process (float* left, float* right, int n, c
     }
     playhead.store (localTick < 0 ? -1 : (int64_t) localTick);
 
-    instrument.process (left, right, n, eventScratch.data(), count);
+    // Fuente: InstrumentEngine (flauta, sinte, guitarra ligera y guitarra v2) o un motor de guitarra v3.
+    const GuitarRigSettings* rig = rigSwap.acquire();
+    const SharedBank* bankPtr = bankSwap.acquire();
+    const SharedImpulse* irPtr = irSwap.acquire();
+    int source = 0;
+    if ((InstrumentId) instrumentSel.load() == InstrumentId::Guitar && rig != nullptr)
+        source = rig->engine == GuitarEngineKind::Modeled ? 1 : (rig->engine == GuitarEngineKind::Samples ? 2 : 0);
+    if (source != lastSource)
+    {
+        // Cambio de motor en marcha: lo que sonaba se apaga con un fundido corto; las notas nuevas van al motor nuevo.
+        instrument.allNotesOff (true);
+        modeled.allNotesOff (true);
+        sampler.allNotesOff (true);
+        lastSource = source;
+    }
+    if (n > (int) monoScratch.size()) source = 0; // bloque mayor de lo preparado: no se reserva en el hilo de audio
+    if (source == 0)
+    {
+        instrument.process (left, right, n, eventScratch.data(), count);
+        // Los otros motores vacían sus colas de release (si las hubiera) sin nuevos eventos.
+        if (modeled.activeVoiceCount() > 0 || sampler.activeVoiceCount() > 0)
+        {
+            std::fill (monoScratch.begin(), monoScratch.begin() + n, 0.0f);
+            modeled.render (monoScratch.data(), n);
+            sampler.render (monoScratch.data(), n);
+            for (int i = 0; i < n; ++i) { left[i] += monoScratch[(size_t) i]; if (right != left) right[i] += monoScratch[(size_t) i]; }
+        }
+    }
+    else
+    {
+        std::fill (monoScratch.begin(), monoScratch.begin() + n, 0.0f);
+        instrument.process (left, right, n, nullptr, 0); // colas del motor anterior
+        if (source == 1)
+        {
+            modeled.setParams (rig->guitar, rig->expression);
+            modeled.process (monoScratch.data(), n, eventScratch.data(), count);
+            if (sampler.activeVoiceCount() > 0) sampler.render (monoScratch.data(), n);
+        }
+        else
+        {
+            sampler.setBank (bankPtr ? bankPtr->get() : nullptr);
+            sampler.setParams (rig->guitar, rig->expression);
+            sampler.process (monoScratch.data(), n, eventScratch.data(), count);
+            if (modeled.activeVoiceCount() > 0) modeled.render (monoScratch.data(), n);
+        }
+        for (int i = 0; i < n; ++i) { left[i] += monoScratch[(size_t) i]; if (right != left) right[i] += monoScratch[(size_t) i]; }
+    }
+    fx.setImpulse (irPtr ? irPtr->get() : nullptr);
 
     // Automatización: se evalúa al inicio del bloque y se suaviza dentro del procesador de efectos.
     float smoothingMs = 30.0f;
@@ -182,6 +260,9 @@ EngineRenderResult renderWithEngine (const Sequence& seq, const EngineRenderOpti
     engine->setSyncToHost (true);
     engine->publishFx (fxs);
     engine->publishAutomation (opts.automation);
+    engine->publishRig (opts.rig);
+    if (opts.bank) engine->publishSampleBank (opts.bank);
+    if (opts.impulse) engine->publishImpulse (opts.impulse);
     engine->publishSequence (makePlaybackData (seq, 0, false));
     engine->prepare (sr, block);
 

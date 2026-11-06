@@ -73,6 +73,12 @@ void FxSettings::sanitise()
     c (delayBeats, 0.125f, 4); c (delayFeedback, 0, 0.92f); c (delayMix, 0, 1); c (delayToneHz, 500, 16000);
     c (reverbSize, 0, 1); c (reverbDamping, 0, 1); c (reverbMix, 0, 1); c (reverbWidth, 0, 1);
     c (outputDb, -48, 12);
+    ampModel = std::clamp (ampModel, 0, 1);
+    c (ampPreGainDb, -12, 40); ampSatType = std::clamp (ampSatType, 0, 2);
+    ampOversample = ampOversample >= 4 ? 4 : (ampOversample >= 2 ? 2 : 1);
+    c (ampPresenceDb, -12, 12); c (ampCompression, 0, 1); c (ampSag, 0, 1); c (ampTrimDb, -24, 24); c (ampOutputLpHz, 2000, 20000);
+    c (reverbPredelayMs, 0, 120); c (reverbLowCutHz, 20, 1000); c (reverbHighCutHz, 1000, 20000); c (delayLowCutHz, 20, 1000);
+    c (ambienceWidth, 0, 1);
 }
 
 bool FxSettings::operator== (const FxSettings& o) const
@@ -198,6 +204,18 @@ std::string serializeFx (const FxSettings& s)
     w ("delayToneHz", s.delayToneHz); w ("delayPingPong", s.delayPingPong ? 1.0f : 0.0f);
     w ("reverbSize", s.reverbSize); w ("reverbDamping", s.reverbDamping); w ("reverbMix", s.reverbMix);
     w ("reverbWidth", s.reverbWidth); w ("outputDb", s.outputDb); w ("limiter", s.limiter ? 1.0f : 0.0f);
+    // v3 (los lectores antiguos ignoran las claves desconocidas)
+    w ("ampModel", (float) s.ampModel); w ("ampPreGainDb", s.ampPreGainDb); w ("ampSatType", (float) s.ampSatType);
+    w ("ampOversample", (float) s.ampOversample); w ("ampPresenceDb", s.ampPresenceDb); w ("ampCompression", s.ampCompression);
+    w ("ampSag", s.ampSag); w ("ampTrimDb", s.ampTrimDb); w ("ampOutputLpHz", s.ampOutputLpHz);
+    w ("reverbPredelayMs", s.reverbPredelayMs); w ("reverbLowCutHz", s.reverbLowCutHz); w ("reverbHighCutHz", s.reverbHighCutHz);
+    w ("delayLowCutHz", s.delayLowCutHz); w ("ambienceWidth", s.ambienceWidth);
+    if (! s.cabIrPath.empty())
+    {
+        std::string one = s.cabIrPath;
+        for (auto& ch : one) if (ch == '\n' || ch == '\r') ch = ' ';
+        o << "fx.cabIr=" << one << "\n";
+    }
     return o.str();
 }
 
@@ -213,6 +231,7 @@ bool applyFxSetting (FxSettings& s, const std::string& key, const std::string& v
         }
         return true;
     }
+    if (key == "cabIr") { s.cabIrPath = value.size() <= 4096 ? value : std::string(); return true; }
     std::istringstream in (value);
     in.imbue (std::locale::classic());
     float v = 0;
@@ -230,10 +249,17 @@ bool applyFxSetting (FxSettings& s, const std::string& key, const std::string& v
         { "delayBeats", &s.delayBeats }, { "delayFeedback", &s.delayFeedback }, { "delayMix", &s.delayMix },
         { "delayToneHz", &s.delayToneHz }, { "reverbSize", &s.reverbSize }, { "reverbDamping", &s.reverbDamping },
         { "reverbMix", &s.reverbMix }, { "reverbWidth", &s.reverbWidth }, { "outputDb", &s.outputDb },
+        { "ampPreGainDb", &s.ampPreGainDb }, { "ampPresenceDb", &s.ampPresenceDb }, { "ampCompression", &s.ampCompression },
+        { "ampSag", &s.ampSag }, { "ampTrimDb", &s.ampTrimDb }, { "ampOutputLpHz", &s.ampOutputLpHz },
+        { "reverbPredelayMs", &s.reverbPredelayMs }, { "reverbLowCutHz", &s.reverbLowCutHz }, { "reverbHighCutHz", &s.reverbHighCutHz },
+        { "delayLowCutHz", &s.delayLowCutHz }, { "ambienceWidth", &s.ambienceWidth },
     };
     for (const auto& f : fields)
         if (key == f.k) { *f.p = v; return true; }
     if (key == "cabType") { s.cabType = (int) std::lround (v); return true; }
+    if (key == "ampModel") { s.ampModel = (int) std::lround (v); return true; }
+    if (key == "ampSatType") { s.ampSatType = (int) std::lround (v); return true; }
+    if (key == "ampOversample") { s.ampOversample = (int) std::lround (v); return true; }
     if (key == "filterMode") { s.filterMode = (int) std::lround (v); return true; }
     if (key == "delayPingPong") { s.delayPingPong = v > 0.5f; return true; }
     if (key == "limiter") { s.limiter = v > 0.5f; return true; }
@@ -334,6 +360,8 @@ void EffectsChain::prepare (double sampleRate, int)
         apL[(size_t) i].buf.assign ((size_t) std::max (8.0, apT[i] * scale), 0.0f);
         apR[(size_t) i].buf.assign ((size_t) std::max (8.0, (apT[i] + 23) * scale), 0.0f);
     }
+    predelayBuf.assign ((size_t) (0.13 * sr) + 8, 0.0f);
+    amp.prepare (sr);
     prepared = true;
     haveLast = false;
     reset();
@@ -354,6 +382,10 @@ void EffectsChain::reset()
     for (auto& b : cab) b.reset();
     svfIc1 = svfIc2 = 0;
     dcX = dcY = 0;
+    std::fill (predelayBuf.begin(), predelayBuf.end(), 0.0f);
+    predelayPos = 0;
+    for (auto* b : { &revLowCut, &revHighCutL, &revHighCutR, &delayLowCutL, &delayLowCutR }) b->reset();
+    amp.reset();
     delayPos = chorusPos = 0;
     chorusPhase = 0;
     delaySmoothed = -1.0f;
@@ -393,6 +425,32 @@ void EffectsChain::updateFilters (const FxSettings& s)
     eqHigh.highShelf (sr, 4000.0, s.eqHighDb);
     delayToneL.lowpass (sr, s.delayToneHz, 0.6);
     delayToneR.lowpass (sr, s.delayToneHz, 0.6);
+    revLowCut.highpass (sr, s.reverbLowCutHz, 0.7);
+    revHighCutL.lowpass (sr, s.reverbHighCutHz, 0.7);
+    revHighCutR.lowpass (sr, s.reverbHighCutHz, 0.7);
+    delayLowCutL.highpass (sr, s.delayLowCutHz, 0.7);
+    delayLowCutR.highpass (sr, s.delayLowCutHz, 0.7);
+}
+
+AmpParams EffectsChain::ampParamsFor (const FxSettings& s)
+{
+    AmpParams p;
+    p.overdrive = s.isOn (FxStage::Overdrive); p.distortion = s.isOn (FxStage::Distortion);
+    p.amp = s.isOn (FxStage::Amp); p.cabinet = s.isOn (FxStage::Cabinet);
+    p.odDrive = s.odDrive; p.odTone = s.odTone; p.distGain = s.distGain; p.distTone = s.distTone;
+    p.preGainDb = s.ampPreGainDb; p.satType = s.ampSatType; p.master = s.ampMaster; p.sag = s.ampSag;
+    p.compression = s.ampCompression; p.bassDb = s.ampBassDb; p.midDb = s.ampMidDb; p.trebleDb = s.ampTrebleDb;
+    p.presenceDb = s.ampPresenceDb; p.cabType = s.cabType; p.outputLpHz = s.ampOutputLpHz; p.trimDb = s.ampTrimDb;
+    p.oversample = s.ampOversample;
+    return p;
+}
+
+int EffectsChain::latencySamples (const FxSettings& s)
+{
+    if (s.ampModel != 1) return 0;
+    if (! s.isOn (FxStage::Amp) && ! s.isOn (FxStage::Overdrive) && ! s.isOn (FxStage::Distortion)) return 0;
+    const int o = s.ampOversample >= 4 ? 4 : (s.ampOversample >= 2 ? 2 : 1);
+    return o == 4 ? Halfband2x::latencyAtLowRate() * 3 / 2 : (o == 2 ? Halfband2x::latencyAtLowRate() : 0);
 }
 
 double EffectsChain::tailSeconds (const FxSettings& s, double bpm)
@@ -406,10 +464,10 @@ double EffectsChain::tailSeconds (const FxSettings& s, double bpm)
     }
     if (s.isOn (FxStage::Reverb) && s.reverbMix > 0.001f)
     {
-        // Freeverb: realimentación 0.7..0.98 => T60 aproximado.
+        // Freeverb: realimentación 0.7..0.98 => T60 aproximado (+ predelay).
         const double fb = s.reverbSize * 0.28 + 0.7;
         const double avgDelay = 1356.0 / 44100.0;
-        tail = std::max (tail, avgDelay * std::log (0.001) / std::log (fb));
+        tail = std::max (tail, avgDelay * std::log (0.001) / std::log (fb) + s.reverbPredelayMs * 0.001);
     }
     if (s.isOn (FxStage::Chorus)) tail = std::max (tail, 0.05);
     return std::min (tail, 20.0);
@@ -452,8 +510,20 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
                                 || differs (st.ampBassDb, last.ampBassDb) || differs (st.ampMidDb, last.ampMidDb)
                                 || differs (st.ampTrebleDb, last.ampTrebleDb) || st.cabType != last.cabType
                                 || differs (st.eqLowDb, last.eqLowDb) || differs (st.eqMidDb, last.eqMidDb) || differs (st.eqMidHz, last.eqMidHz)
-                                || differs (st.eqHighDb, last.eqHighDb) || differs (st.delayToneHz, last.delayToneHz);
+                                || differs (st.eqHighDb, last.eqHighDb) || differs (st.delayToneHz, last.delayToneHz)
+                                || differs (st.reverbLowCutHz, last.reverbLowCutHz) || differs (st.reverbHighCutHz, last.reverbHighCutHz)
+                                || differs (st.delayLowCutHz, last.delayLowCutHz);
     if (filtersChanged) updateFilters (st);
+    const bool ampV3 = st.ampModel == 1;
+    if (ampV3)
+    {
+        AmpParams ap = ampParamsFor (st);
+        // La automatización de "Saturación" actúa sobre la ganancia previa del ampli v3 (0..1 => 2..24 dB).
+        if (autoValues != nullptr && autoValues[(int) AutoTarget::Drive] >= 0.0f)
+            ap.preGainDb = GuitarAmp::preGainDbForForce (100.0 * autoValues[(int) AutoTarget::Drive]);
+        amp.setParams (ap);
+        amp.setImpulse (impulse);
+    }
 
     const int ramp = std::max (1, (int) (autoSmoothingMs * 0.001 * sr));
     auto targetOf = [&] (AutoTarget t, float fallback) {
@@ -497,6 +567,9 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
     const float fb = st.delayFeedback;
 
     // Reverb
+    const int predelaySamples = predelayBuf.empty() ? 0 : std::clamp ((int) (st.reverbPredelayMs * 0.001 * sr), 0, (int) predelayBuf.size() - 2);
+    const float width = st.ambienceWidth;
+    const bool revLowCutOn = st.reverbLowCutHz > 20.5f, revHighCutOn = st.reverbHighCutHz < 19999.0f, delayLowCutOn = st.delayLowCutHz > 20.5f;
     const float roomFb = st.reverbSize * 0.28f + 0.7f;
     const float damp1 = st.reverbDamping * 0.4f, damp2 = 1.0f - damp1;
     const float wet1 = st.reverbWidth / 2.0f + 0.5f, wet2 = (1.0f - st.reverbWidth) / 2.0f;
@@ -511,6 +584,12 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
     {
         float x = 0.5f * (left[i] + right[i]);
         const float drv = sDrive.next(), dg = sDistGain.next();
+        if (ampV3)
+        {
+            x = amp.process (x);
+        }
+        else
+        {
         if (odOn) x = overdrive (x, drv) * odLevel;
         if (distOn) x = distortion (x, dg) * distLevel;
         if (ampOn)
@@ -529,6 +608,7 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
             x = y;
         }
         if (cabOn) for (auto& b : cab) x = b.process (x);
+        }
         if (eqOn) x = eqHigh.process (eqMid.process (eqLow.process (x)));
         const float cutoff = sCutoff.next();
         if (filtOn)
@@ -577,7 +657,8 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
             const int i2 = (i1 + 1) % size;
             const float dl = delayL[(size_t) i1] + fr * (delayL[(size_t) i2] - delayL[(size_t) i1]);
             const float dr = delayR[(size_t) i1] + fr * (delayR[(size_t) i2] - delayR[(size_t) i1]);
-            const float fl = delayToneL.process (dl), fr2 = delayToneR.process (dr);
+            float fl = delayToneL.process (dl), fr2 = delayToneR.process (dr);
+            if (delayLowCutOn) { fl = delayLowCutL.process (fl); fr2 = delayLowCutR.process (fr2); }
             if (st.delayPingPong)
             {
                 delayL[(size_t) delayPos] = flushDenormal (0.5f * (l + r) + fb * fr2);
@@ -596,7 +677,15 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
         const float rmix = sReverbMix.next();
         if (revOn)
         {
-            const float in = (l + r) * 0.015f;
+            float in = (l + r) * 0.015f;
+            if (predelaySamples > 0)
+            {
+                const int size = (int) predelayBuf.size();
+                predelayBuf[(size_t) predelayPos] = in;
+                in = predelayBuf[(size_t) ((predelayPos - predelaySamples + size) % size)];
+                predelayPos = (predelayPos + 1) % size;
+            }
+            if (revLowCutOn) in = revLowCut.process (in);
             float outL = 0, outR = 0;
             for (size_t c = 0; c < 8; ++c)
             {
@@ -621,7 +710,9 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
                     if (++ap->pos >= (int) ap->buf.size()) ap->pos = 0;
                 }
             }
-            const float wl = outL * wet1 + outR * wet2, wr = outR * wet1 + outL * wet2;
+            float wl = outL * wet1 + outR * wet2, wr = outR * wet1 + outL * wet2;
+            if (revHighCutOn) { wl = revHighCutL.process (wl); wr = revHighCutR.process (wr); }
+            if (width < 0.999f) { const float m = 0.5f * (wl + wr), d = 0.5f * (wl - wr) * width; wl = m + d; wr = m - d; }
             l = l * (1.0f - 0.3f * rmix) + rmix * 3.0f * wl;
             r = r * (1.0f - 0.3f * rmix) + rmix * 3.0f * wr;
         }

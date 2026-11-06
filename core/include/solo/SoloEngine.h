@@ -3,7 +3,9 @@
 // Lo usan tanto el plugin (tiempo real) como el render offline (exportación WAV), de modo que lo que
 // se exporta pasa por exactamente el mismo código que lo que se escucha.
 #include "solo/Effects.h"
+#include "solo/GuitarSoundEngine.h"
 #include "solo/Playback.h"
+#include "solo/Sampler.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -32,6 +34,21 @@ struct AutomationSet
     }
 };
 
+// Guitar Tone Studio v3: qué motor suena cuando el instrumento es la guitarra y con qué parámetros.
+enum class GuitarEngineKind { LegacyV2 = 0, Modeled = 1, Samples = 2 };
+constexpr int kNumGuitarEngines = 3;
+const char* guitarEngineName (GuitarEngineKind k);
+
+struct GuitarRigSettings
+{
+    GuitarEngineKind engine = GuitarEngineKind::LegacyV2;
+    GuitarParams guitar;
+    ExpressionScaling expression = expressionScaling (65.0);
+};
+
+using SharedBank = std::shared_ptr<const SampleBank>;
+using SharedImpulse = std::shared_ptr<const CabImpulse>;
+
 class SoloEngine
 {
 public:
@@ -48,10 +65,16 @@ public:
     bool publishSequenceIfChanged (const Sequence* seq, int64_t startOffsetTicks, bool loop);
     void publishFx (const FxSettings& fx);
     void publishAutomation (const AutomationSet& a);
+    // v3
+    void publishRig (const GuitarRigSettings& r);
+    void publishSampleBank (SharedBank bank);     // nullptr = sin banco
+    void publishImpulse (SharedImpulse ir);       // nullptr = pantalla por modelo
     void collectGarbage();
+    // Latencia (muestras) de los efectos publicados (sobremuestreo del ampli v3). Hilo de mensajes.
+    int latencySamples() const { return publishedLatency; }
 
     // ------------------------------------------------ cualquier hilo (atómicos)
-    void setInstrument (InstrumentId id) { instrument.setInstrument (id); }
+    void setInstrument (InstrumentId id) { instrument.setInstrument (id); instrumentSel.store ((int) id); }
     void setSyncToHost (bool b) { syncToHost.store (b); }
     void setUseHostTempo (bool b) { useHostTempo.store (b); }
     void setManualBpm (double b) { manualBpm.store (b); }
@@ -73,20 +96,29 @@ public:
     // Escribe el audio (estéreo; si right == left, mono) sustituyendo el contenido del buffer.
     BlockResult process (float* left, float* right, int numSamples, const TransportState& host);
     const TimedEvent* events() const { return eventScratch.data(); }
-    int activeVoiceCount() const { return instrument.activeVoiceCount(); }
+    int activeVoiceCount() const { return instrument.activeVoiceCount() + modeled.activeVoiceCount() + sampler.activeVoiceCount(); }
     uint32_t resyncCount() const { return player.resyncCount(); }
     uint32_t nudgeCount() const { return player.nudgeCount(); }
 
 private:
     InstrumentEngine instrument;
+    ModeledGuitarEngine modeled;
+    SampleGuitarEngine sampler;
     EffectsChain fx;
     SoloPlayer player;
     ManualClock previewClock;
     RealtimeSwap<PlaybackData> playback;
     RealtimeSwap<FxSettings> fxSwap;
     RealtimeSwap<AutomationSet> autoSwap;
+    RealtimeSwap<GuitarRigSettings> rigSwap;
+    RealtimeSwap<SharedBank> bankSwap;
+    RealtimeSwap<SharedImpulse> irSwap;
     std::vector<TimedEvent> eventScratch;
+    std::vector<float> monoScratch;
     double sampleRate = 48000.0;
+    std::atomic<int> instrumentSel { 0 };
+    int lastSource = -1; // 0 = InstrumentEngine, 1 = modelada v3, 2 = samples
+    int publishedLatency = 0;
 
     std::atomic<bool> previewStartRequest { false }, previewStopRequest { false }, previewRunning { false };
     std::atomic<bool> syncToHost { true }, useHostTempo { true };
@@ -114,6 +146,10 @@ struct EngineRenderOptions
     AutomationSet automation;
     double extraTailSeconds = 1.0; // release del instrumento
     double maxTailSeconds = 12.0;
+    // v3
+    GuitarRigSettings rig;
+    SharedBank bank;
+    SharedImpulse impulse;
 };
 
 struct EngineRenderResult
