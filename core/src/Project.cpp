@@ -356,6 +356,7 @@ OpResult ProjectController::setFx (const FxSettings& fx, const std::string& labe
     state.settings.fxEnabled = true;
     if (fxPresetIndex (state.settings.fxPreset) >= 0 && ! (fxPresets()[(size_t) fxPresetIndex (state.settings.fxPreset)].settings == state.fx))
         state.settings.fxPreset = "Personalizado";
+    markToneCustomIfChanged();
     OpResult r;
     r.ok = true;
     r.fxChanged = true;
@@ -446,6 +447,17 @@ OpResult ProjectController::generateFromDNA (const DerivedOptions& o, uint64_t s
 }
 
 // ======================================================================== Guitar Tone Studio v3
+// Un preset de tono sigue "siendo" el preset mientras solo cambien las macros: se compara con el preset de fábrica
+// con las macros actuales aplicadas. Cualquier otra edición (Pro) lo convierte en "Personalizado".
+void ProjectController::markToneCustomIfChanged()
+{
+    const int t = tonePresetIndex (state.settings.fxPreset);
+    if (t < 0) return;
+    FxSettings f = tonePresets()[(size_t) t].fx; GuitarParams g = tonePresets()[(size_t) t].guitar;
+    applyMacros (state.macros, f, g);
+    if (! (f == state.fx) || ! (g == state.guitar)) state.settings.fxPreset = "Personalizado";
+}
+
 OpResult ProjectController::setMacros (const ToneMacros& mIn, bool rememberStep)
 {
     ToneMacros m = mIn;
@@ -492,6 +504,7 @@ OpResult ProjectController::setGuitarParams (const GuitarParams& g, const std::s
     remember (label);
     state.guitar = g;
     state.guitar.sanitise();
+    markToneCustomIfChanged();
     OpResult r;
     r.ok = true;
     r.rigChanged = true;

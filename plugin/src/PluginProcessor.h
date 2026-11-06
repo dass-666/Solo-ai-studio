@@ -95,6 +95,10 @@ public:
     // Diagnóstico de transporte: últimos bloques (posición declarada por el host, eventos, resincronizaciones).
     // Lo escribe el hilo de audio en un anillo fijo y lo lee la interfaz para guardarlo en un fichero de texto.
     juce::String transportDiagnosticText() const;
+    // v3: recursos del rig (hilo de mensajes). El banco SFZ y la IR se cargan cuando cambian las rutas del estado
+    // (settings.sfzPath / fx.cabIrPath) y se publican al audio por puntero compartido (sin bloqueos).
+    struct RigResources { juce::String bankSummary, bankError, irSummary, irError; int latencySamples = 0; };
+    RigResources getRigResources() const;
     double effectiveBpm() const;
     int64_t playheadTick() const { return audio.playheadTick(); }
     juce::String getLastStatus() const;
@@ -121,6 +125,13 @@ private:
     std::atomic<int> hostTsNum { 4 }, hostTsDen { 4 };
     std::atomic<double> tailSeconds { 0.5 };
     double currentSampleRate = 48000.0;
+    // v3: recursos cargados (protegidos por stateLock)
+    void ensureRigResources();   // llamar con stateLock tomado
+    solo::SharedBank bank;
+    std::string bankPath, bankError, bankSummary;
+    solo::SharedImpulse impulse;
+    std::string irPath, irError, irSummary;
+    int publishedLatency = 0;
 
     struct TransportRecord
     {

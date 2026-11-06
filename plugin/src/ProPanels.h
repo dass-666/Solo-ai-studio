@@ -63,6 +63,39 @@ private:
     bool updating = false;
 };
 
+// ---------------------------------------------------------------- Ampli / Samples (Guitar Tone Studio v3)
+// Muestra y edita los valores DSP reales que las macros escriben (previo, compresión, presencia, predelay…),
+// el motor de guitarra, los parámetros de la fuente, el banco SFZ y la IR de pantalla.
+class TonePanel : public ProPanel
+{
+public:
+    explicit TonePanel (PanelContext&);
+    void resized() override;
+    void refresh() override;
+
+private:
+    struct Param
+    {
+        juce::String name;
+        double lo, hi, step;
+        std::function<double (const solo::FxSettings&, const solo::GuitarParams&)> get;
+        std::function<void (solo::FxSettings&, solo::GuitarParams&, double)> set;
+        bool guitar; // true: cambia GuitarParams (setGuitarParams); false: FxSettings (setFx)
+    };
+    void commit (int index);
+    void loadSfz();
+    void loadIr();
+    std::vector<Param> params;
+    juce::OwnedArray<juce::Slider> sliders;
+    juce::OwnedArray<juce::Label> labels;
+    juce::ComboBox engineBox, pickupBox, satBox, oversampleBox;
+    juce::Label engineLabel, pickupLabel, satLabel, oversampleLabel, bankLabel, irLabel, latencyLabel;
+    juce::TextButton sfzButton { "Cargar SFZ..." }, sfzClear { "Quitar" }, irButton { "Cargar IR (WAV)..." }, irClear { "Quitar" },
+        synthButton { juce::String::fromUTF8 ("Banco sintético de prueba") };
+    std::unique_ptr<juce::FileChooser> chooser;
+    bool updating = false;
+};
+
 // ---------------------------------------------------------------- Automatización (curva por compases)
 class AutomationCurve : public juce::Component
 {

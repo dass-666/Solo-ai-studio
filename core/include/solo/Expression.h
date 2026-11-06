@@ -13,6 +13,7 @@
 // La macro Expresión (0..100 %) NO añade gestos aleatorios: solo escala los que el intérprete decidió
 // musicalmente (y, al generar, cuánta tendencia tiene el intérprete a decidirlos; ver Performer).
 #include "solo/Sequence.h"
+#include <cmath>
 
 namespace solo
 {
@@ -51,7 +52,7 @@ struct NoteGestures
     double brightness = 0.5;   // 0..1 por velocity y ataque
     double lengthSec = 0.5;
 
-    bool hasPitchGestures() const { return bendType != BendType::None || vibratoDepth > 0.0 || slideFromSemis != 0.0; }
+    bool hasPitchGestures() const { return bendType != BendType::None || vibratoDepth > 0.0 || std::abs (slideFromSemis) > 1e-9; }
 };
 
 // Construye los gestos de una nota. 'guitar' = vibrato asimétrico y limitaciones de guitarra.

@@ -6,7 +6,7 @@ namespace
 {
 const juce::Colour kBg (0xff101216), kPanel (0xff181b21), kText (0xffd7dce5), kDim (0xff8a93a3),
     kAccent (0xff2ec4b6), kError (0xffff6b6b);
-constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 172;
+constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 206;
 
 juce::String U (const char* s) { return juce::String::fromUTF8 (s); }
 
@@ -135,6 +135,12 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     setupLabel (tsLabel, U ("Compás"), *this);
     setupLabel (energyLabel, "Intensidad", *this);
     setupLabel (densityLabel, "Densidad", *this);
+    setupLabel (toneLabel, "Tono", *this);
+    setupLabel (guitarLabel, "Guitarra", *this);
+    setupLabel (forceLabel, "Fuerza", *this);
+    setupLabel (expressionLabel, U ("Expresión"), *this);
+    setupLabel (ambienceLabel, "Ambiente", *this);
+    for (auto* l : { &forceLabel, &expressionLabel, &ambienceLabel }) l->setJustificationType (juce::Justification::centred);
 
     keyEditor.setTooltip (U ("Ej.: Am, C, F#m, La menor"));
     progEditor.setTooltip (U ("Un acorde por compás: Am F C G  (también Am | F | C | G, % repite)"));
@@ -160,6 +166,41 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     setupSlider (energySlider, 0.0, 1.0, 0.01, *this);
     setupSlider (densitySlider, 0.0, 1.0, 0.01, *this);
     energySlider.onValueChange = densitySlider.onValueChange = [this] { if (! updating) pushSettings(); };
+
+    // ---- Guitar Tone Studio v3: tono, guitarra y las tres macroperillas
+    for (size_t i = 0; i < tonePresets().size(); ++i) toneBox.addItem (U (tonePresets()[i].name), (int) i + 1);
+    toneBox.setTextWhenNothingSelected (U ("Personalizado"));
+    toneBox.onChange = [this] {
+        if (updating || toneBox.getSelectedId() < 1) return;
+        const std::string name = tonePresets()[(size_t) toneBox.getSelectedId() - 1].name;
+        const auto r = proc.perform ([name] (ProjectController& pc) { return pc.setTonePreset (name); });
+        status (utf8 (r.message), ! r.ok);
+        refreshFromProcessor();
+    };
+    for (int i = 0; i < kNumGuitarEngines; ++i) guitarBox.addItem (U (guitarEngineName ((GuitarEngineKind) i)), i + 1);
+    guitarBox.onChange = [this] {
+        if (updating || guitarBox.getSelectedId() < 1) return;
+        const auto k = (GuitarEngineKind) (guitarBox.getSelectedId() - 1);
+        const auto r = proc.perform ([k] (ProjectController& pc) { return pc.setGuitarEngine (k); });
+        status (utf8 (r.message), ! r.ok);
+        refreshFromProcessor();
+    };
+    for (auto* cb : { &toneBox, &guitarBox }) addAndMakeVisible (cb);
+    for (auto* k : { &forceKnob, &expressionKnob, &ambienceKnob })
+    {
+        k->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        k->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 44, 16);
+        k->setRange (0.0, 100.0, 1.0);
+        k->setTextValueSuffix (" %");
+        k->setColour (juce::Slider::rotarySliderFillColourId, kAccent);
+        // Arrastrar: previsualización sin pasos de deshacer; soltar (o rueda/teclado): un único paso.
+        k->onValueChange = [this, k] { if (! updating) commitMacros (! k->isMouseButtonDown()); };
+        k->onDragEnd = [this] { if (! updating) commitMacros (true); };
+        addAndMakeVisible (k);
+    }
+    forceKnob.setTooltip (U ("Fuerza: ganancia del previo (2..24 dB), compresión, ataque y presencia"));
+    expressionKnob.setTooltip (U ("Expresión: cuánto vibrato, bends, slides y legato (0 % = ninguno; se aplica al generar y al sonar)"));
+    ambienceKnob.setTooltip (U ("Ambiente: reverb (hasta 32 %), delay (hasta 25 %), predelay y cola"));
 
     generateButton.setColour (juce::TextButton::buttonColourId, kAccent.darker (0.25f));
     generateButton.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
@@ -289,6 +330,7 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     genTab.layout = [this] { layoutGeneration(); };
     notesPanel = std::make_unique<NotesPanel> (panelCtx);
     fxPanel = std::make_unique<FxPanel> (panelCtx);
+    tonePanel = std::make_unique<TonePanel> (panelCtx);
     autoPanel = std::make_unique<AutomationPanel> (panelCtx);
     voicePanel = std::make_unique<VoicePanel> (panelCtx);
     historyPanel = std::make_unique<HistoryPanel> (panelCtx);
@@ -299,6 +341,7 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     tabs.addTab (U ("Generación"), tabBg, &genTab, false);
     tabs.addTab (U ("Notas"), tabBg, notesPanel.get(), false);
     tabs.addTab (U ("Efectos"), tabBg, fxPanel.get(), false);
+    tabs.addTab (U ("Ampli / Samples"), tabBg, tonePanel.get(), false);
     tabs.addTab (U ("Automatización"), tabBg, autoPanel.get(), false);
     tabs.addTab (U ("Voz / ADN"), tabBg, voicePanel.get(), false);
     tabs.addTab (U ("Historial A/B"), tabBg, historyPanel.get(), false);
@@ -307,11 +350,11 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     tabs.getTabbedButtonBar().addChangeListener (this);
 
     proc.addChangeListener (this);
-    constrainer.setMinimumSize (1100, 640);
+    constrainer.setMinimumSize (1100, 720);
     constrainer.setMaximumSize (2000, 1400);
     setConstrainer (&constrainer);
     setResizable (true, true);
-    setSize (1180, 720);
+    setSize (1180, 800);
 
     refreshFromProcessor();
     pianoRoll.onSelectionChanged();
@@ -351,6 +394,19 @@ void SoloAIStudioEditor::refreshFromProcessor()
     engineBox.setSelectedId (s.engine == 1 ? 1 : 2, juce::dontSendNotification);
     keepMotifsToggle.setToggleState (s.keepMotifs, juce::dontSendNotification);
     pitchBendToggle.setToggleState (s.midiPitchBend, juce::dontSendNotification);
+    {
+        ToneMacros m;
+        proc.read ([&] (const ProjectController& pc) { m = pc.state.macros; });
+        forceKnob.setValue (m.force, juce::dontSendNotification);
+        expressionKnob.setValue (m.expression, juce::dontSendNotification);
+        ambienceKnob.setValue (m.ambience, juce::dontSendNotification);
+        const int t = s.fxEnabled ? tonePresetIndex (s.fxPreset) : -1;
+        if (t >= 0) toneBox.setSelectedId (t + 1, juce::dontSendNotification);
+        else toneBox.setSelectedId (0, juce::dontSendNotification);
+        guitarBox.setSelectedId (juce::jlimit (0, kNumGuitarEngines - 1, s.guitarEngine) + 1, juce::dontSendNotification);
+        const bool guitar = s.instrument == InstrumentId::Guitar || s.instrument == InstrumentId::GuitarLite;
+        guitarBox.setEnabled (guitar);
+    }
     setProMode (s.proMode);
     if (s.proTab >= 0 && s.proTab < tabs.getNumTabs() && tabs.getCurrentTabIndex() != s.proTab) tabs.setCurrentTabIndex (s.proTab, false);
     validateTextFields();
@@ -388,7 +444,7 @@ void SoloAIStudioEditor::refreshSequence()
 
 void SoloAIStudioEditor::refreshPanels()
 {
-    for (ProPanel* p : std::initializer_list<ProPanel*> { notesPanel.get(), fxPanel.get(), autoPanel.get(), voicePanel.get(),
+    for (ProPanel* p : std::initializer_list<ProPanel*> { notesPanel.get(), fxPanel.get(), tonePanel.get(), autoPanel.get(), voicePanel.get(),
                                                           historyPanel.get(), commandPanel.get() })
         if (p != nullptr) p->refresh();
 }
@@ -649,6 +705,15 @@ void SoloAIStudioEditor::resized()
     row (tsLabel, tsBox);
     row (energyLabel, energySlider);
     row (densityLabel, densitySlider);
+    row (toneLabel, toneBox);
+    row (guitarLabel, guitarBox);
+    {
+        auto k = left.removeFromTop (78);
+        const int w = k.getWidth() / 3;
+        auto one = [&] (juce::Label& l, juce::Slider& s) { auto c = k.removeFromLeft (w); l.setBounds (c.removeFromTop (16)); s.setBounds (c); };
+        one (forceLabel, forceKnob); one (expressionLabel, expressionKnob); one (ambienceLabel, ambienceKnob);
+        left.removeFromTop (6);
+    }
     left.removeFromTop (4);
     generateButton.setBounds (left.removeFromTop (44));
     left.removeFromTop (8);
@@ -725,4 +790,20 @@ bool SoloAIStudioEditor::keyPressed (const juce::KeyPress& k)
         return true;
     }
     return false;
+}
+
+// ------------------------------------------------------------------ Guitar Tone Studio v3: macros
+void SoloAIStudioEditor::commitMacros (bool remember)
+{
+    ToneMacros m;
+    m.force = forceKnob.getValue();
+    m.expression = expressionKnob.getValue();
+    m.ambience = ambienceKnob.getValue();
+    const auto r = proc.perform ([m, remember] (ProjectController& pc) { return pc.setMacros (m, remember); });
+    if (remember)
+    {
+        status (utf8 (r.message), ! r.ok);
+        refreshFromProcessor(); // el preset pasa a "Personalizado" si cambió respecto al de fábrica; Pro se sincroniza
+    }
+    else refreshPanels();       // mientras se arrastra: solo las pestañas Pro (valores DSP en directo)
 }

@@ -1,4 +1,6 @@
 #include "ProPanels.h"
+#include "solo/Sampler.h"
+#include "solo/ToneStudio.h"
 
 using namespace solo;
 
@@ -129,10 +131,14 @@ FxPanel::FxPanel (PanelContext& c) : ProPanel (c)
     presetBox.addItem (U ("Sin efectos"), 1);
     const auto& presets = fxPresets();
     for (size_t i = 0; i < presets.size(); ++i) presetBox.addItem (U (presets[i].name), (int) i + 2);
+    presetBox.addSeparator();
+    presetBox.addSectionHeading (U ("Tono v3 (ampli + guitarra + macros)"));
+    for (size_t i = 0; i < tonePresets().size(); ++i) presetBox.addItem (U (tonePresets()[i].name), 100 + (int) i);
     presetBox.onChange = [this] {
         if (updating) return;
         const int id = presetBox.getSelectedId();
         if (id < 1) return;
+        if (id >= 100) { const std::string name = tonePresets()[(size_t) id - 100].name; run ([=] (ProjectController& p) { return p.setTonePreset (name); }); return; }
         const std::string name = id == 1 ? std::string ("Sin efectos") : std::string (fxPresets()[(size_t) id - 2].name);
         run ([=] (ProjectController& p) { return p.setFxPreset (name); });
     };
@@ -189,9 +195,10 @@ void FxPanel::refresh()
     bool enabled = false;
     ctx.proc.read ([&] (const ProjectController& p) { fx = p.state.fx; preset = p.state.settings.fxPreset; enabled = p.state.settings.fxEnabled; });
     enableToggle.setToggleState (enabled, juce::dontSendNotification);
-    const int idx = fxPresetIndex (preset);
+    const int idx = fxPresetIndex (preset), tidx = tonePresetIndex (preset);
     if (! enabled) presetBox.setSelectedId (1, juce::dontSendNotification);
     else if (idx >= 0) presetBox.setSelectedId (idx + 2, juce::dontSendNotification);
+    else if (tidx >= 0) presetBox.setSelectedId (100 + tidx, juce::dontSendNotification);
     else presetBox.setText (U (preset.empty() ? "Personalizado" : preset), juce::dontSendNotification);
     for (int i = 0; i < kNumFxStages; ++i) stageToggles[i]->setToggleState (fx.isOn ((FxStage) i), juce::dontSendNotification);
     for (int i = 0; i < kNumAutoTargets; ++i) sliders[i]->setValue (paramToAuto ((AutoTarget) i, fx), juce::dontSendNotification);
@@ -210,6 +217,172 @@ void FxPanel::resized()
     for (int i = 0; i < 3; ++i) { r3.add (*sliderLabels[i], 90); r3.add (*sliders[i], sw - 102); }
     auto r4 = row (a);
     for (int i = 3; i < 6; ++i) { r4.add (*sliderLabels[i], 90); r4.add (*sliders[i], sw - 102); }
+}
+
+
+// ============================================================ Ampli / Samples (v3)
+TonePanel::TonePanel (PanelContext& c) : ProPanel (c)
+{
+    using Fx = FxSettings; using G = GuitarParams;
+    auto fxp = [&] (const char* n, double lo, double hi, double step, float Fx::*m) {
+        params.push_back ({ U (n), lo, hi, step, [m] (const Fx& f, const G&) { return (double) (f.*m); }, [m] (Fx& f, G&, double v) { f.*m = (float) v; }, false });
+    };
+    auto gp = [&] (const char* n, double lo, double hi, double step, float G::*m) {
+        params.push_back ({ U (n), lo, hi, step, [m] (const Fx&, const G& g) { return (double) (g.*m); }, [m] (Fx&, G& g, double v) { g.*m = (float) v; }, true });
+    };
+    // Fila 1-2: ampli (lo que escribe Fuerza) · Fila 3: ambiente (lo que escribe Ambiente) · Fila 4-5: fuente
+    fxp ("Previo dB", 0, 30, 0.1, &Fx::ampPreGainDb);
+    fxp ("Compresión", 0, 1, 0.01, &Fx::ampCompression);
+    fxp ("Sag", 0, 1, 0.01, &Fx::ampSag);
+    fxp ("Presencia dB", -6, 6, 0.1, &Fx::ampPresenceDb);
+    fxp ("Master", 0, 1, 0.01, &Fx::ampMaster);
+    fxp ("Salida LP Hz", 3000, 16000, 50, &Fx::ampOutputLpHz);
+    fxp ("Ajuste dB", -12, 12, 0.1, &Fx::ampTrimDb);
+    fxp ("Predelay ms", 0, 120, 1, &Fx::reverbPredelayMs);
+    fxp ("Rev. corte bajo", 20, 600, 5, &Fx::reverbLowCutHz);
+    fxp ("Rev. corte alto", 1000, 20000, 100, &Fx::reverbHighCutHz);
+    fxp ("Delay corte bajo", 20, 600, 5, &Fx::delayLowCutHz);
+    fxp ("Anchura", 0, 1, 0.01, &Fx::ambienceWidth);
+    gp ("Pos. pastilla", 0.08, 0.45, 0.005, &G::pickupPosition);
+    gp ("Brillo", 0, 1, 0.01, &G::brightness);
+    gp ("Dureza púa", 0, 1, 0.01, &G::pickHardness);
+    gp ("Sustain", 0, 1, 0.01, &G::sustain);
+    gp ("Rigidez", 0, 1, 0.01, &G::stiffness);
+    gp ("Cuerpo", 0, 1, 0.01, &G::bodyResonance);
+    gp ("Palm mute", 0, 1, 0.01, &G::palmMuteDamp);
+    gp ("Fuente dB", -24, 24, 0.5, &G::gainDb);
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        auto* l = labels.add (new juce::Label());
+        label (*l, params[i].name, *this);
+        auto* s = sliders.add (new juce::Slider());
+        s->setSliderStyle (juce::Slider::LinearHorizontal);
+        s->setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
+        s->setRange (params[i].lo, params[i].hi, params[i].step);
+        s->onDragEnd = [this, i] { commit ((int) i); };
+        s->onValueChange = [this, i, s] { if (! updating && ! s->isMouseButtonDown()) commit ((int) i); };
+        addAndMakeVisible (s);
+    }
+    for (int i = 0; i < kNumGuitarEngines; ++i) engineBox.addItem (U (guitarEngineName ((GuitarEngineKind) i)), i + 1);
+    engineBox.onChange = [this] {
+        if (updating || engineBox.getSelectedId() < 1) return;
+        const auto k = (GuitarEngineKind) (engineBox.getSelectedId() - 1);
+        run ([k] (ProjectController& p) { return p.setGuitarEngine (k); });
+    };
+    pickupBox.addItem (U ("Simple (brillante)"), 1); pickupBox.addItem (U ("Doble (humbucker)"), 2);
+    pickupBox.onChange = [this] {
+        if (updating || pickupBox.getSelectedId() < 1) return;
+        const int pu = pickupBox.getSelectedId() - 1;
+        run ([pu] (ProjectController& p) { auto g = p.state.guitar; g.pickup = pu; return p.setGuitarParams (g, "Pastilla"); });
+    };
+    satBox.addItem (U ("Válvula"), 1); satBox.addItem (U ("Alta ganancia"), 2); satBox.addItem (U ("Limpio"), 3);
+    satBox.onChange = [this] {
+        if (updating || satBox.getSelectedId() < 1) return;
+        const int t = satBox.getSelectedId() - 1;
+        run ([t] (ProjectController& p) { auto f = p.state.fx; f.ampSatType = t; f.ampModel = 1; return p.setFx (f, "Tipo de saturación"); });
+    };
+    oversampleBox.addItem ("1x", 1); oversampleBox.addItem ("2x", 2); oversampleBox.addItem ("4x", 4);
+    oversampleBox.onChange = [this] {
+        if (updating || oversampleBox.getSelectedId() < 1) return;
+        const int o = oversampleBox.getSelectedId();
+        run ([o] (ProjectController& p) { auto f = p.state.fx; f.ampOversample = o; f.ampModel = 1; return p.setFx (f, "Oversampling"); });
+    };
+    for (auto* cb : { &engineBox, &pickupBox, &satBox, &oversampleBox }) addAndMakeVisible (cb);
+    label (engineLabel, "Motor", *this); label (pickupLabel, "Pastilla", *this); label (satLabel, U ("Saturación"), *this);
+    label (oversampleLabel, "Oversampling", *this); label (bankLabel, "", *this); label (irLabel, "", *this); label (latencyLabel, "", *this);
+    bankLabel.setMinimumHorizontalScale (0.7f); irLabel.setMinimumHorizontalScale (0.7f);
+    sfzButton.onClick = [this] { loadSfz(); };
+    sfzClear.onClick = [this] { run ([] (ProjectController& p) { return p.setSfzPath (""); }); };
+    irButton.onClick = [this] { loadIr(); };
+    irClear.onClick = [this] { run ([] (ProjectController& p) { auto f = p.state.fx; f.cabIrPath.clear(); return p.setFx (f, "Quitar IR"); }); };
+    synthButton.onClick = [this] {
+        // Genera (una vez) el banco sintético etiquetado en Documentos/Solo AI Studio/banco-sintetico y lo carga.
+        auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Solo AI Studio").getChildFile ("banco-sintetico");
+        dir.createDirectory();
+        std::string err;
+        const auto sfz = dir.getChildFile ("guitarra-sintetica.sfz").existsAsFile() ? dir.getChildFile ("guitarra-sintetica.sfz").getFullPathName().toStdString()
+                                                                                      : makeSyntheticBank (dir.getFullPathName().toStdString(), err);
+        if (sfz.empty()) { ctx.status (U ("No se pudo generar el banco: ") + U (err), true); return; }
+        run ([sfz] (ProjectController& p) { p.setGuitarEngine (GuitarEngineKind::Samples); return p.setSfzPath (sfz); });
+    };
+    for (auto* b : { &sfzButton, &sfzClear, &irButton, &irClear, &synthButton }) addAndMakeVisible (b);
+}
+
+void TonePanel::commit (int index)
+{
+    if (updating || index < 0 || index >= (int) params.size()) return;
+    const double v = sliders[index]->getValue();
+    const auto& prm = params[(size_t) index];
+    if (prm.guitar)
+        run ([&prm, v] (ProjectController& p) { auto g = p.state.guitar; FxSettings f = p.state.fx; prm.set (f, g, v); return p.setGuitarParams (g, "Editar guitarra"); });
+    else
+        run ([&prm, v] (ProjectController& p) { auto f = p.state.fx; GuitarParams g = p.state.guitar; prm.set (f, g, v); f.ampModel = 1; return p.setFx (f, "Editar ampli"); });
+}
+
+void TonePanel::loadSfz()
+{
+    chooser = std::make_unique<juce::FileChooser> (U ("Biblioteca de guitarra (SFZ)"), juce::File(), "*.sfz");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
+        const auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        const std::string path = f.getFullPathName().toStdString();
+        run ([path] (ProjectController& p) { p.setGuitarEngine (GuitarEngineKind::Samples); return p.setSfzPath (path); });
+    });
+}
+
+void TonePanel::loadIr()
+{
+    chooser = std::make_unique<juce::FileChooser> (U ("Respuesta al impulso de pantalla (WAV)"), juce::File(), "*.wav");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
+        const auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        const std::string path = f.getFullPathName().toStdString();
+        run ([path] (ProjectController& p) { auto fx = p.state.fx; fx.cabIrPath = path; fx.ampModel = 1; fx.setOn (FxStage::Cabinet, true); return p.setFx (fx, "Cargar IR"); });
+    });
+}
+
+void TonePanel::refresh()
+{
+    const juce::ScopedValueSetter<bool> svs (updating, true);
+    FxSettings fx; GuitarParams g; SoloSettings s;
+    ctx.proc.read ([&] (const ProjectController& p) { fx = p.state.fx; g = p.state.guitar; s = p.state.settings; });
+    for (size_t i = 0; i < params.size(); ++i) sliders[(int) i]->setValue (params[i].get (fx, g), juce::dontSendNotification);
+    engineBox.setSelectedId (juce::jlimit (0, kNumGuitarEngines - 1, s.guitarEngine) + 1, juce::dontSendNotification);
+    pickupBox.setSelectedId (g.pickup == 0 ? 1 : 2, juce::dontSendNotification);
+    satBox.setSelectedId (juce::jlimit (0, 2, fx.ampSatType) + 1, juce::dontSendNotification);
+    oversampleBox.setSelectedId (fx.ampOversample >= 4 ? 4 : (fx.ampOversample >= 2 ? 2 : 1), juce::dontSendNotification);
+    const auto rr = ctx.proc.getRigResources();
+    juce::String bankText;
+    if (s.guitarEngine != (int) GuitarEngineKind::Samples) bankText = U ("Samples: elige el motor «Guitarra con samples» para usar una biblioteca SFZ");
+    else if (s.sfzPath.empty()) bankText = U ("Sin biblioteca SFZ: carga la tuya (con licencia que lo permita) o el banco sintético de prueba");
+    else if (rr.bankError.isNotEmpty() && rr.bankSummary.isEmpty()) bankText = U ("Error: ") + rr.bankError;
+    else bankText = rr.bankSummary + (rr.bankError.isNotEmpty() ? U (" · ") + rr.bankError : juce::String());
+    bankLabel.setText (bankText, juce::dontSendNotification);
+    bankLabel.setColour (juce::Label::textColourId, rr.bankError.isNotEmpty() && rr.bankSummary.isEmpty() ? juce::Colour (0xffff6b6b) : kDim);
+    juce::String irText = fx.ampModel != 1 ? U ("Cadena v2 (sin IR): elige un preset de tono v3 para activar el ampli nuevo")
+                        : fx.cabIrPath.empty() ? U ("Pantalla: modelo interno (sin IR)")
+                        : rr.irError.isNotEmpty() && rr.irSummary.isEmpty() ? U ("Error IR: ") + rr.irError : U ("IR: ") + rr.irSummary;
+    irLabel.setText (irText, juce::dontSendNotification);
+    latencyLabel.setText (U ("Latencia declarada: ") + juce::String (rr.latencySamples) + U (" muestras"), juce::dontSendNotification);
+}
+
+void TonePanel::resized()
+{
+    auto a = getLocalBounds().reduced (8, 4);
+    auto r0 = row (a, 24);
+    r0.add (engineLabel, 44); r0.add (engineBox, 170); r0.add (sfzButton, 100); r0.add (synthButton, 170); r0.add (sfzClear, 56); r0.rest (bankLabel);
+    auto r1 = row (a, 24);
+    r1.add (satLabel, 70); r1.add (satBox, 110); r1.add (oversampleLabel, 86); r1.add (oversampleBox, 60); r1.add (irButton, 130); r1.add (irClear, 56);
+    r1.add (irLabel, 420); r1.rest (latencyLabel);
+    const int perRow = 5;
+    for (size_t i = 0; i < params.size(); i += perRow)
+    {
+        auto rr = row (a, 22);
+        const int w = rr.r.getWidth() / perRow;
+        for (size_t j = i; j < std::min (params.size(), i + perRow); ++j) { rr.add (*labels[(int) j], 92); rr.add (*sliders[(int) j], w - 104); }
+    }
+    auto r5 = row (a, 22);
+    r5.add (pickupLabel, 60); r5.add (pickupBox, 150);
 }
 
 // ============================================================ Automatización

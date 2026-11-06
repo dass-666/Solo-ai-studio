@@ -56,6 +56,7 @@ private:
     void validateTextFields();
 
     void onGenerate();
+    void commitMacros (bool remember); // perillas Fuerza/Expresión/Ambiente -> valores DSP reales
     void onExportMidi();
     void onExportWav();
     void onSavePreset();
@@ -79,6 +80,10 @@ private:
     juce::TextEditor keyEditor, progEditor;
     juce::ComboBox instrumentBox, styleBox, barsBox, tsBox;
     juce::Slider energySlider, densitySlider;
+    // Guitar Tone Studio v3 (modo fácil)
+    juce::Label toneLabel, guitarLabel, forceLabel, expressionLabel, ambienceLabel;
+    juce::ComboBox toneBox, guitarBox;
+    juce::Slider forceKnob, expressionKnob, ambienceKnob;
     juce::TextButton generateButton { "GENERAR" }, playButton { "ESCUCHAR" };
     juce::TextButton prevButton { "<" }, nextButton { ">" };
     juce::Label variationLabel;
@@ -108,6 +113,7 @@ private:
     LayoutBox genTab;
     std::unique_ptr<NotesPanel> notesPanel;
     std::unique_ptr<FxPanel> fxPanel;
+    std::unique_ptr<TonePanel> tonePanel;
     std::unique_ptr<AutomationPanel> autoPanel;
     std::unique_ptr<VoicePanel> voicePanel;
     std::unique_ptr<HistoryPanel> historyPanel;

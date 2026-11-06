@@ -688,7 +688,7 @@ TEST (tone_state_roundtrip_v3_and_legacy_fallback)
     CHECK (back.macros == c.state.macros);
     CHECK (back.settings.guitarEngine == (int) GuitarEngineKind::Samples);
     CHECK (back.settings.sfzPath == "C:/Samples/mi guitarra.sfz");
-    CHECK (back.settings.fxPreset == "Emotional Lead");
+    CHECK (back.settings.fxPreset == "Personalizado"); // la edición Pro de la guitarra separa el estado del preset de fábrica
     // Estado anterior a v3 (sin claves guitarEngine/gtr./tone.): motor v2 y cadena v2, tal como sonaba.
     std::string legacy;
     for (const auto& line : [&] { std::vector<std::string> v; std::istringstream in (text); std::string l; while (std::getline (in, l)) v.push_back (l); return v; }())

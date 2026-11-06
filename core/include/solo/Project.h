@@ -88,6 +88,7 @@ public:
 
 private:
     void remember (const std::string& label) { undo.push (snapshotOf (state, label)); }
+    void markToneCustomIfChanged();
     bool macroPreviewPending = false;
     ProjectSnapshot macroPreviewBefore;
     OpResult pushVariation (const Sequence& s, uint64_t seed, const std::string& label, const std::string& name = {});

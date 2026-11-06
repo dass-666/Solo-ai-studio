@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "solo/VoiceAnalysis.h"
 
 #include <cmath>
 
@@ -31,8 +32,16 @@ uint64_t SoloAIStudioProcessor::freshSeed()
 // ======================================================================== audio
 void SoloAIStudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    const bool rateChanged = std::abs (currentSampleRate - sampleRate) > 0.5;
     currentSampleRate = sampleRate > 0 ? sampleRate : 48000.0;
     audio.prepare (currentSampleRate, juce::jmax (1, samplesPerBlock));
+    if (rateChanged)
+    {
+        // La IR se remuestrea a la frecuencia del motor: hay que volver a prepararla.
+        const juce::ScopedLock sl (stateLock);
+        irPath.clear();
+        publishAll();
+    }
 }
 
 void SoloAIStudioProcessor::releaseResources() {}
@@ -173,6 +182,68 @@ void SoloAIStudioProcessor::publishAll()
     audio.publishFx (fx);
     audio.publishAutomation (st.settings.fxEnabled ? st.automation : AutomationSet {});
     tailSeconds.store (juce::jlimit (0.5, 12.0, EffectsChain::tailSeconds (fx, effectiveBpm()) + 0.5));
+    // v3: rig (motor, fuente, expresión), banco SFZ e IR
+    ensureRigResources();
+    audio.publishRig (project.rigSettings());
+    audio.publishSampleBank (bank);
+    audio.publishImpulse (impulse);
+    const int lat = audio.latencySamples();
+    if (lat != publishedLatency) { publishedLatency = lat; setLatencySamples (lat); }
+}
+
+void SoloAIStudioProcessor::ensureRigResources()
+{
+    const auto& st = project.state;
+    // Banco de samples: solo se (re)carga si cambia la ruta. Un fallo deja el motor de samples en silencio y se informa.
+    const std::string wantBank = st.settings.guitarEngine == (int) GuitarEngineKind::Samples ? st.settings.sfzPath : std::string();
+    if (wantBank != bankPath)
+    {
+        bankPath = wantBank;
+        bank.reset();
+        bankError.clear(); bankSummary.clear();
+        if (! wantBank.empty())
+        {
+            auto b = std::make_shared<SampleBank>();
+            std::string err;
+            if (loadSfz (wantBank, *b, err)) { bank = b; bankSummary = b->summary(); bankError = err; }
+            else bankError = err.empty() ? "No se pudo cargar el banco" : err;
+        }
+    }
+    // Impulso de pantalla del usuario (WAV mono/estéreo): se remuestrea a la frecuencia del motor.
+    const std::string wantIr = st.fx.ampModel == 1 ? st.fx.cabIrPath : std::string();
+    if (wantIr != irPath)
+    {
+        irPath = wantIr;
+        impulse.reset();
+        irError.clear(); irSummary.clear();
+        if (! wantIr.empty())
+        {
+            MonoAudio a;
+            std::string err;
+            if (! readWavFile (wantIr, a, err)) irError = err;
+            else
+            {
+                auto ir = std::make_shared<CabImpulse>();
+                if (prepareCabImpulse (a.samples, a.sampleRate, currentSampleRate, *ir, err))
+                {
+                    ir->name = juce::File (wantIr).getFileName().toStdString();
+                    impulse = ir;
+                    irSummary = ir->name + " (" + std::to_string (ir->taps.size()) + " muestras a " + std::to_string ((int) currentSampleRate) + " Hz)";
+                    irError = err;
+                }
+                else irError = err;
+            }
+        }
+    }
+}
+
+SoloAIStudioProcessor::RigResources SoloAIStudioProcessor::getRigResources() const
+{
+    const juce::ScopedLock sl (stateLock);
+    RigResources r;
+    r.bankSummary = utf8 (bankSummary); r.bankError = utf8 (bankError); r.irSummary = utf8 (irSummary); r.irError = utf8 (irError);
+    r.latencySamples = publishedLatency;
+    return r;
 }
 
 // ======================================================================== API del editor
@@ -357,6 +428,8 @@ bool SoloAIStudioProcessor::exportMidi (const juce::File& file, juce::String& me
         o.gmProgram = profileFor (s.instrument).gmProgram;
         o.trackName = std::string ("Solo AI Studio - ") + instrumentName (s.instrument);
         o.pitchBend = s.midiPitchBend;
+        // v3: con los motores nuevos las curvas exportadas son los mismos gestos que suenan (escalados por Expresión).
+        if (s.guitarEngine != (int) GuitarEngineKind::LegacyV2 && s.instrument == InstrumentId::Guitar) o.expressionPercent = project.state.macros.expression;
     }
     seq.bpm = effectiveBpm();
     const auto bytes = writeMidiFile (seq, o);
@@ -382,6 +455,9 @@ bool SoloAIStudioProcessor::exportWav (const juce::File& file, juce::String& mes
         ro.sampleRate = st.settings.wavSampleRate;
         ro.instrument = st.settings.instrument;
         if (st.settings.fxEnabled) { ro.fx = st.fx; ro.automation = st.automation; }
+        ro.rig = project.rigSettings();
+        ro.bank = bank;
+        ro.impulse = impulse;
     }
     ro.gain = outputGain->get();
     seq.bpm = effectiveBpm();
