@@ -32,7 +32,12 @@ jobs:
         run: |
           Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          & pluginval/pluginval.exe --strictness-level 5 --validate-in-process --skip-gui-tests --output-dir pluginval-logs "build/plugin/SoloAIStudio_artefacts/Release/VST3/Solo AI Studio.vst3"
+          # pluginval.exe es una aplicación gráfica: PowerShell no la espera con "&". Start-Process -Wait sí.
+          $p = Start-Process pluginval/pluginval.exe -Wait -NoNewWindow -PassThru -ArgumentList @(
+            "--strictness-level", "5", "--validate-in-process", "--skip-gui-tests", "--output-dir", "pluginval-logs",
+            "`"build/plugin/SoloAIStudio_artefacts/Release/VST3/Solo AI Studio.vst3`"")
+          Write-Host "pluginval (carpeta de compilación): código de salida $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "pluginval falló" }
 
       - name: Batería de demos (MIDI + WAV)
         run: |
@@ -72,8 +77,10 @@ jobs:
           & "build/plugin/SoloHostTest_artefacts/Release/SoloHostTest.exe" $inst
           if ($LASTEXITCODE -ne 0) { throw "El host de prueba falló con el VST3 instalado" }
           if (Test-Path pluginval/pluginval.exe) {
-            & pluginval/pluginval.exe --strictness-level 5 --validate-in-process --skip-gui-tests $inst
-            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::pluginval falló con el VST3 instalado" }
+            $p = Start-Process pluginval/pluginval.exe -Wait -NoNewWindow -PassThru -ArgumentList @(
+              "--strictness-level", "5", "--validate-in-process", "--skip-gui-tests", "`"$inst`"")
+            Write-Host "pluginval (copia instalada): código de salida $($p.ExitCode)"
+            if ($p.ExitCode -ne 0) { throw "pluginval falló con el VST3 instalado" }
           } else { Write-Host "::warning::pluginval no disponible (descarga fallida); se omite" }
           & package/Instalar-SoloAIStudio.ps1 -Desinstalar
           if (Test-Path $inst) { throw "La desinstalación no borró el plugin" }
