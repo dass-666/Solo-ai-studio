@@ -160,6 +160,74 @@ int main (int argc, char** argv)
             check (restored.contains ("var 77 2 4 146 4") && restored.contains ("n 1920 1800 76 110 0"),
                    tag + "getStateInformation conserva la secuencia");
 
+            if (sr == 48000.0 && block == 512)
+            {
+                // Persistencia de un proyecto v2 completo a través del plugin real (lo que FL guarda en el .flp):
+                // efectos, automatización, bloqueos, favoritas, nombres, A/B y ADN deben volver idénticos.
+                auto wrap = [] (const std::string& text) {
+                    juce::XmlElement xml ("VST3PluginState");
+                    juce::MemoryBlock raw (text.data(), text.size());
+                    xml.createNewChildElement ("IComponent")->addTextElement (raw.toBase64Encoding());
+                    juce::MemoryBlock wrapped;
+                    juce::AudioProcessor::copyXmlToBinary (xml, wrapped);
+                    return wrapped;
+                };
+                auto unwrap = [] (const juce::MemoryBlock& m) {
+                    std::string out;
+                    if (auto xml = juce::AudioProcessor::getXmlFromBinary (m.getData(), (int) m.getSize()))
+                        if (auto* comp = xml->getChildByName ("IComponent"))
+                        {
+                            juce::MemoryBlock raw;
+                            raw.fromBase64Encoding (comp->getAllSubText());
+                            out.assign ((const char*) raw.getData(), raw.getSize());
+                        }
+                    // El wrapper VST3 de JUCE añade su bloque privado (estado de bypass) tras nuestros datos:
+                    // se compara solo el estado del plugin, re-serializado.
+                    solo::SoloState parsed;
+                    std::string e;
+                    return solo::deserializeState (out, parsed, e) ? solo::serializeState (parsed) : std::string ("ERROR: ") + e;
+                };
+                solo::SoloState st;
+                solo::ComposerParams cp;
+                std::string err;
+                st.settings.style = solo::Style::Cinematic;
+                st.settings.instrument = solo::InstrumentId::Flute;
+                st.settings.toComposerParams (100.0, cp, err);
+                for (uint64_t seed : { 11ull, 12ull, 13ull }) { cp.seed = seed; st.history.push (solo::SoloComposer::compose (cp), seed); }
+                st.history.setFavorite (0, true);
+                st.history.rename (0, "Toma buena");
+                st.slotA = st.history.all()[0].id;
+                st.slotB = st.history.all()[2].id;
+                st.lockedBars = { false, true, true, false, false, false, false, false };
+                st.settings.fxPreset = "Cinematic Lead";
+                st.fx = solo::fxPresets()[(size_t) solo::fxPresetIndex ("Cinematic Lead")].settings;
+                auto& lane = st.automation.lane (solo::AutoTarget::ReverbMix);
+                lane.enabled = true;
+                lane.points = { { 0, 0.1f }, { 8 * 4 * solo::kPPQ, 0.9f } };
+                st.dnaSummary = "prueba de persistencia";
+                st.settings.outputGain = 0.75;
+                const auto original = solo::serializeState (st);
+                const auto w = wrap (original);
+                inst->setStateInformation (w.getData(), (int) w.getSize());
+                juce::MemoryBlock back;
+                inst->getStateInformation (back);
+                const auto restored = unwrap (back);
+                check (restored == original, "Proyecto v2 completo: getState(setState(x)) == x (" + juce::String ((int) restored.size()) + " bytes)");
+
+                // Un estado corrupto no debe alterar nada (FL podría pasar datos truncados).
+                auto bad = original.substr (0, original.size() / 2);
+                const auto wb = wrap (bad);
+                inst->setStateInformation (wb.getData(), (int) wb.getSize());
+                juce::MemoryBlock afterBad;
+                inst->getStateInformation (afterBad);
+                check (unwrap (afterBad) == original, "Estado truncado rechazado sin modificar el proyecto");
+                const char junk[] = "esto no es un estado";
+                inst->setStateInformation (junk, (int) sizeof (junk));
+                juce::MemoryBlock afterJunk;
+                inst->getStateInformation (afterJunk);
+                check (unwrap (afterJunk) == original, "Datos basura rechazados sin modificar el proyecto");
+            }
+
             if (testEditor && sr == 48000.0 && block == 512)
             {
                 std::unique_ptr<juce::AudioProcessorEditor> ed (inst->createEditorAndMakeActive());

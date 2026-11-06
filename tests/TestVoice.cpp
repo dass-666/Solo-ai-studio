@@ -1,5 +1,6 @@
 // Pruebas de Hum-to-Solo / Vocal-to-Solo con voces SINTÉTICAS (no se ha probado con voces reales).
 #include "TestFramework.h"
+#include "solo/SoloEngine.h"
 #include "solo/AudioRenderer.h"
 #include "solo/VoiceAnalysis.h"
 
@@ -263,4 +264,57 @@ TEST (vocal_localized_correction_preserves_rest)
     for (size_t i = 0; i + 1 < before.size(); ++i) CHECK (before[i] == after[i]); // la última puede acortarse
     CHECK (! (inBars (out, 2, 2) == inBars (solo, 2, 2)));
     for (size_t i = 1; i < out.notes.size(); ++i) CHECK (out.notes[i].startTick >= out.notes[i - 1].endTick());
+}
+
+// Comprobación independiente de la exportación: se analiza el WAV exportado con el detector de alturas y se compara
+// con las notas del solo. Si el instrumento sonase notas equivocadas, a destiempo o faltasen notas, fallaría.
+// (Sin intérprete ni efectos para que cada nota tenga una altura estable y comparable.)
+TEST (exported_wav_contains_the_solo_notes)
+{
+    for (int i = 0; i < kNumInstruments; ++i)
+    {
+        const auto inst = (InstrumentId) i;
+        ComposerParams p;
+        Key::parse ("Am", p.key);
+        std::string err;
+        Progression::parse ("Am F C G", p.progression, err);
+        p.bars = 8; p.bpm = 100; p.style = Style::Emotional; p.instrument = inst; p.seed = 5;
+        p.performer = PerformerProfile::None;
+        const auto s = SoloComposer::compose (p);
+        EngineRenderOptions o;
+        o.instrument = inst;
+        const auto r = renderWithEngine (s, o);
+        MonoAudio m;
+        m.sampleRate = o.sampleRate;
+        m.samples = r.left;
+        VoiceAnalysisOptions vo;
+        vo.maxF0 = 2500; // la flauta pasa de 1 kHz (el rango por defecto es el de la voz)
+        const auto va = analyseVoice (m, vo);
+        int considered = 0, pitchOk = 0;
+        std::vector<double> onsetErr;
+        const double secPerTick = 60.0 / p.bpm / kPPQ;
+        for (const auto& n : s.notes)
+        {
+            const double st = (double) n.startTick * secPerTick, en = (double) n.endTick() * secPerTick;
+            if (en - st < 0.15) continue;
+            ++considered;
+            const double mid = 0.5 * (st + en);
+            for (const auto& v : va.notes)
+                if (v.startSec <= mid && v.endSec >= mid)
+                {
+                    if (std::abs (v.midi - n.pitch) < 0.5) ++pitchOk;
+                    onsetErr.push_back (std::abs (v.startSec - st));
+                    break;
+                }
+        }
+        std::sort (onsetErr.begin(), onsetErr.end());
+        const double medianOnset = onsetErr.empty() ? 1.0 : onsetErr[onsetErr.size() / 2];
+        std::printf ("  %-30s %d/%d notas con la altura correcta en el WAV, error de ataque mediano %.0f ms\n",
+                     instrumentName (inst), pitchOk, considered, medianOnset * 1000);
+        CHECK (considered >= 10);
+        CHECK (pitchOk >= considered * 9 / 10);
+        // La flauta tiene un ataque de soplo suave: el detector la ve ~30 ms más tarde (carácter del instrumento,
+        // no un desfase de tiempo: guitarras ~1 ms, sinte ~11 ms). Margen 50 ms.
+        CHECK (medianOnset < 0.05);
+    }
 }

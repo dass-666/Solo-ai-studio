@@ -41,7 +41,11 @@ public:
 
     // ------------------------------------------------ hilo de mensajes (pueden reservar memoria)
     void prepare (double sampleRate, int maxBlockSize);
-    void publishSequence (std::unique_ptr<PlaybackData> data) { playback.publish (std::move (data)); }
+    void publishSequence (std::unique_ptr<PlaybackData> data) { playback.publish (std::move (data)); havePublished = false; }
+    // Publica solo si la secuencia, el inicio o el loop han cambiado. Publicar una secuencia nueva corta las notas que
+    // suenan (es lo correcto si cambian las notas), así que mover un control que no toca notas NO debe republicar.
+    // Devuelve true si publicó. seq == nullptr = sin solo.
+    bool publishSequenceIfChanged (const Sequence* seq, int64_t startOffsetTicks, bool loop);
     void publishFx (const FxSettings& fx);
     void publishAutomation (const AutomationSet& a);
     void collectGarbage();
@@ -87,6 +91,11 @@ private:
     dsp::Smoothed gainSmoothed;
     std::array<float, kNumAutoTargets> autoHold {};
     bool autoHoldValid = false;
+
+    // Último publicado (solo hilo de mensajes)
+    bool havePublished = false, lastHadSeq = false, lastLoop = false;
+    Sequence lastSeq;
+    int64_t lastOffset = 0;
 };
 
 // ---------------------------------------------------------------- render offline

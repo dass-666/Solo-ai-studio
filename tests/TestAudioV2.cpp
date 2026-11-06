@@ -236,6 +236,100 @@ TEST (engine_live_matches_export)
     CHECK (rms (L, 0, (size_t) offsetSamples - 10) < 1e-6);
 }
 
+// FL Studio puede llamar a processBlock con bloques de tamaño variable e incluso mayores que el anunciado en
+// prepareToPlay. El motor debe dar el mismo audio (sin desbordes: ejecutar también con ASan) con bloques de
+// 1 a 8192 muestras habiendo preparado solo 64.
+TEST (engine_irregular_and_oversized_blocks)
+{
+    const auto seq = SoloComposer::compose (params2 (Style::ExpressiveBlues));
+    const FxSettings fxs = fxPresets()[(size_t) fxPresetIndex ("Blues Lead")].settings;
+    EngineRenderOptions o;
+    o.fx = fxs;
+    const auto ref = renderWithEngine (seq, o);
+
+    SoloEngine e;
+    e.setInstrument (InstrumentId::Guitar);
+    e.publishFx (fxs);
+    e.publishSequence (makePlaybackData (seq, 0, false));
+    e.prepare (48000, 64);
+    std::vector<float> L (ref.left.size()), R (L.size());
+    TransportState t;
+    t.valid = true; t.playing = true; t.bpm = 120;
+    static const int kSizes[] = { 1, 64, 8192, 37, 4096, 1, 512, 3000, 2, 8192, 128, 999 };
+    size_t pos = 0;
+    int k = 0;
+    while (pos < L.size())
+    {
+        const int n = (int) std::min<size_t> ((size_t) kSizes[k++ % 12], L.size() - pos);
+        t.ppqPosition = (double) pos * 120.0 / 60.0 / 48000.0;
+        e.process (L.data() + pos, R.data() + pos, n, t);
+        pos += (size_t) n;
+    }
+    double sumDiff = 0, sumRef = 0;
+    for (size_t i = 0; i < L.size(); ++i)
+    {
+        const double d = L[i] - ref.left[i];
+        sumDiff += d * d;
+        sumRef += (double) ref.left[i] * ref.left[i];
+    }
+    const double relDb = 10 * std::log10 (std::max (1e-30, sumDiff) / std::max (1e-30, sumRef));
+    std::printf ("  bloques irregulares (1..8192, preparado para 64): diferencia con la exportación %.1f dB\n", relDb);
+    CHECK (relDb < -60.0);
+}
+
+// Defecto encontrado en la auditoría para FL: el plugin republicaba la secuencia en cada cambio de ajustes
+// (mover un deslizador, cambiar un efecto), y republicar corta la nota que suena. Con publishSequenceIfChanged,
+// republicar lo mismo no emite note-off; cambiar las notas sí.
+TEST (engine_republish_same_sequence_does_not_cut_notes)
+{
+    Sequence seq;
+    seq.bars = 2;
+    Note n;
+    n.startTick = 0; n.lengthTicks = 4 * kPPQ; n.pitch = 64; n.velocity = 100;
+    seq.notes.push_back (n);
+    SoloEngine e;
+    e.setInstrument (InstrumentId::Synth);
+    e.prepare (48000, 256);
+    CHECK (e.publishSequenceIfChanged (&seq, 0, false));
+    std::vector<float> L (256), R (256);
+    TransportState t;
+    t.valid = true; t.playing = true; t.bpm = 120;
+    int ons = 0, offs = 0;
+    auto block = [&] (int b) {
+        t.ppqPosition = b * 256.0 * 2.0 / 48000.0;
+        const auto r = e.process (L.data(), R.data(), 256, t);
+        for (int i = 0; i < r.eventCount; ++i) (e.events()[i].type == EventType::NoteOn ? ons : offs)++;
+    };
+    int b = 0;
+    for (; b < 20; ++b) block (b);
+    CHECK (ons == 1 && offs == 0);
+    CHECK (! e.publishSequenceIfChanged (&seq, 0, false)); // lo mismo: no se publica
+    for (; b < 40; ++b) block (b);
+    CHECK (ons == 1 && offs == 0);                      // la nota sigue sonando
+    auto changed = seq;
+    changed.notes[0].pitch = 65;
+    CHECK (e.publishSequenceIfChanged (&changed, 0, false));
+    block (b++);
+    CHECK (offs == 1);                                  // cambio real: se cierra la nota anterior
+    CHECK (e.publishSequenceIfChanged (&changed, 0, true)); // cambiar el loop sí republica
+
+    // Comportamiento antiguo del plugin (publicar siempre, aunque nada cambie): la nota se corta y no se
+    // reanuda (el reproductor no reinicia una nota a medias), así que queda silencio hasta la siguiente.
+    SoloEngine old;
+    old.setInstrument (InstrumentId::Synth);
+    old.prepare (48000, 256);
+    old.publishSequence (makePlaybackData (seq, 0, false));
+    int oldOns = 0, oldOffs = 0;
+    for (int k = 0; k < 40; ++k)
+    {
+        t.ppqPosition = k * 256.0 * 2.0 / 48000.0;
+        if (k == 20) old.publishSequence (makePlaybackData (seq, 0, false)); // misma secuencia
+        const auto r = old.process (L.data(), R.data(), 256, t);
+        for (int i = 0; i < r.eventCount; ++i) (old.events()[i].type == EventType::NoteOn ? oldOns : oldOffs)++;
+    }
+    CHECK (oldOns == 1 && oldOffs == 1); // nota cortada a mitad
+}
+
 TEST (engine_no_allocations_in_audio_thread)
 {
     const auto seq = SoloComposer::compose (params2 (Style::VirtuosoRock));

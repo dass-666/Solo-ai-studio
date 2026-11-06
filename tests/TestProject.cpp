@@ -2,7 +2,10 @@
 #include "TestFramework.h"
 #include "solo/Commands.h"
 #include "solo/CreativeDNA.h"
+#include "solo/MidiFile.h"
 #include "solo/Project.h"
+#include "solo/SoloEngine.h"
+#include <algorithm>
 
 #include <cmath>
 
@@ -255,4 +258,119 @@ TEST (commands_preview_then_execute_with_undo)
     executeCommand (pc, parseCommand ({ "deshaz" }), 0);
     executeCommand (pc, parseCommand ({ "deshaz" }), 0);
     CHECK (pc.state.history == before);
+}
+
+// ============================================================ flujo completo (lo que se probará a mano en FL)
+// Para cada estilo (8) y cada instrumento (4) se recorre el flujo de la prueba manual con invariantes en cada paso.
+namespace
+{
+bool sameSnapshot (const ProjectSnapshot& a, const ProjectSnapshot& b)
+{
+    return a.history == b.history && a.fx == b.fx && a.automation == b.automation && a.lockedBars == b.lockedBars;
+}
+std::vector<Note> notesInBars (const Sequence& s, int a, int b)
+{
+    std::vector<Note> out;
+    const int64_t bt = s.timeSignature.ticksPerBar();
+    for (const auto& n : s.notes)
+        if (n.startTick >= a * bt && n.startTick < (b + 1) * bt) out.push_back (n);
+    return out;
+}
+} // namespace
+
+TEST (manual_flow_all_styles_and_instruments)
+{
+    int runs = 0, undoSteps = 0;
+    for (int st = 0; st < kNumStyles; ++st)
+        for (int in = 0; in < kNumInstruments; ++in)
+        {
+            ProjectController pc = project();
+            pc.state.settings.style = (Style) st;
+            pc.state.settings.instrument = (InstrumentId) in;
+            const auto initial = snapshotOf (pc.state, "inicio");
+            const uint64_t seed = 1000 + (uint64_t) (st * 10 + in);
+
+            // 1. Generar dos variaciones
+            CHECK (pc.generate (seed).ok);
+            CHECK (pc.generate (seed + 1).ok);
+            CHECK (pc.current() && ! pc.current()->notes.empty());
+
+            // 2. Bloquear compases 1-2 y regenerar 1-4: los compases 1-2 no cambian
+            CHECK (pc.setBarsLocked (0, 1, true).ok);
+            const auto keep = notesInBars (*pc.current(), 0, 1);
+            CHECK (pc.regenerateBars (0, 3, seed + 2).ok);
+            const auto kept = notesInBars (*pc.current(), 0, 1);
+            bool same = keep.size() == kept.size();
+            for (size_t i = 0; same && i < keep.size(); ++i) same = keep[i].sameMusic (kept[i]);
+            CHECK (same);
+
+            // 3. Editar notas: borrar la última, cambiar velocity de la primera
+            auto edited = *pc.current();
+            if (edited.notes.size() > 2)
+            {
+                edited.notes.pop_back();
+                edited.notes.front().velocity = 33;
+                CHECK (pc.replaceSequence (edited).ok);
+                CHECK (pc.current()->notes.size() == edited.notes.size());
+                CHECK (pc.current()->notes.front().velocity == 33);
+            }
+
+            // 4. Transponer y articulaciones (el palm mute puede no existir en flauta/sinte: se acepta el rechazo)
+            const auto before = pc.current()->notes.size();
+            CHECK (pc.transpose (4, 5, 2).ok);
+            CHECK (pc.current()->notes.size() == before);
+            CHECK (pc.setArticulation (-1, -1, Articulation::Vibrato, true).ok);
+            pc.setArticulation (-1, -1, Articulation::PalmMute, true);
+            for (const auto& n : pc.current()->notes) { CHECK (n.pitch >= 0 && n.pitch <= 127); CHECK (n.lengthTicks > 0); }
+
+            // 5. Efectos: todos los presets, luego uno fijo
+            for (const auto& pr : fxPresets()) CHECK (pc.setFxPreset (pr.name).ok);
+            CHECK (pc.setFxPreset ("Blues Lead").ok);
+            CHECK (pc.adjustFx (AutoTarget::DelayMix, 0.2).ok);
+
+            // 6. Orden en español
+            RecognizedText t;
+            t.text = "regenera los compases 3 a 4 y luego más reverb";
+            const auto cmd = parseCommand (t);
+            CHECK (cmd.ops.size() == 2);
+            CHECK (executeCommand (pc, cmd, seed + 3).ok);
+
+            // 7. Exportar MIDI y releerlo
+            const auto& seq = *pc.current();
+            MidiExportOptions mo;
+            ParsedMidi pm;
+            std::string err;
+            CHECK (readMidiFile (writeMidiFile (seq, mo), pm, err));
+            bool midiOk = pm.notes.size() == seq.notes.size() && pm.danglingNoteOns == 0;
+            for (size_t i = 0; midiOk && i < seq.notes.size(); ++i)
+                midiOk = pm.notes[i].pitch == seq.notes[i].pitch && pm.notes[i].startTick == seq.notes[i].startTick;
+            CHECK (midiOk);
+
+            // 8. Exportar WAV con efectos: todas las notas suenan, sin NaN ni clipping
+            EngineRenderOptions ro;
+            ro.instrument = (InstrumentId) in;
+            ro.fx = pc.state.fx;
+            ro.automation = pc.state.automation;
+            const auto r = renderWithEngine (seq, ro);
+            CHECK (r.noteOns == (int) seq.notes.size() && r.noteOffs == r.noteOns);
+            bool finite = true;
+            for (float x : r.left) finite &= std::isfinite (x);
+            CHECK (finite && r.peak > 0.01f && r.peak <= 1.0f);
+
+            // 9. Guardar y restaurar el proyecto
+            SoloState back;
+            CHECK (deserializeState (serializeState (pc.state), back, err));
+            CHECK (serializeState (back) == serializeState (pc.state));
+
+            // 10. Deshacer hasta el principio y rehacer hasta el final
+            const auto finalSnap = snapshotOf (pc.state, "final");
+            int n = 0;
+            while (pc.undo.canUndo()) { CHECK (pc.undoLast().ok); ++n; }
+            CHECK (sameSnapshot (snapshotOf (pc.state, ""), initial));
+            for (int k = 0; k < n; ++k) CHECK (pc.redoLast().ok);
+            CHECK (sameSnapshot (snapshotOf (pc.state, ""), finalSnap));
+            undoSteps += n;
+            ++runs;
+        }
+    std::printf ("  %d flujos completos (8 estilos x 4 instrumentos), %d pasos de deshacer/rehacer verificados\n", runs, undoSteps);
 }

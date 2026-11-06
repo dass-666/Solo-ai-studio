@@ -17,6 +17,19 @@ const char* articulationName (Articulation a)
     return "?";
 }
 
+namespace
+{
+// Rango de compases: -1 (o negativo) = todo el solo. Se recorta a [0, bars-1].
+void normaliseBarRange (int& fromBar, int& toBar, int bars)
+{
+    const int last = std::max (0, bars - 1);
+    if (fromBar < 0) { fromBar = 0; if (toBar < 0) toBar = last; }
+    if (toBar < 0) toBar = last;
+    fromBar = std::clamp (fromBar, 0, last);
+    toBar = std::clamp (toBar, fromBar, last);
+}
+} // namespace
+
 bool ProjectController::params (ComposerParams& out, std::string& error) const
 {
     return state.settings.toComposerParams (bpm, out, error);
@@ -66,8 +79,7 @@ OpResult ProjectController::regenerateBars (int fromBar, int toBar, uint64_t see
     if (! params (p, err)) return OpResult::fail (err);
     if (state.settings.keepMotifs && state.settings.motifSeed) p.motifSeed = state.settings.motifSeed;
     const auto& cur = state.history.current();
-    fromBar = std::clamp (fromBar, 0, cur.bars - 1);
-    toBar = std::clamp (toBar, fromBar, cur.bars - 1);
+    normaliseBarRange (fromBar, toBar, cur.bars);
     const auto out = SoloComposer::regenerate (cur, p, seed, lockedBarsFor (cur.bars), fromBar, toBar);
     return pushVariation (out, state.history.currentSeed(),
                           "Regenerar compases " + std::to_string (fromBar + 1) + "-" + std::to_string (toBar + 1));
@@ -87,8 +99,7 @@ OpResult ProjectController::regenerateNotes (const std::vector<int>& indices, ui
 OpResult ProjectController::setBarsLocked (int fromBar, int toBar, bool locked)
 {
     const int bars = hasSequence() ? state.history.current().bars : state.settings.bars;
-    fromBar = std::clamp (fromBar, 0, bars - 1);
-    toBar = std::clamp (toBar, fromBar, bars - 1);
+    normaliseBarRange (fromBar, toBar, bars);
     remember (locked ? "Bloquear compases" : "Desbloquear compases");
     state.lockedBars = lockedBarsFor (bars);
     for (int b = fromBar; b <= toBar; ++b) state.lockedBars[(size_t) b] = locked;
@@ -196,6 +207,7 @@ OpResult ProjectController::transpose (int fromBar, int toBar, int semis)
 {
     if (! hasSequence()) return OpResult::fail ("No hay solo");
     auto s = state.history.current();
+    normaliseBarRange (fromBar, toBar, s.bars);
     const int64_t barT = s.timeSignature.ticksPerBar();
     const auto& prof = profileFor (state.settings.instrument);
     const auto locked = lockedBarsFor (s.bars);
@@ -210,7 +222,7 @@ OpResult ProjectController::transpose (int fromBar, int toBar, int semis)
         ++changed;
     }
     if (changed == 0) return OpResult::fail ("Ninguna nota se puede transportar (bloqueadas o fuera del registro)");
-    auto r = replaceSequence (s, "Transportar " + std::to_string (semis) + " semitonos");
+    auto r = replaceSequence (s, "Transportar " + std::to_string (semis) + (std::abs (semis) == 1 ? " semitono" : " semitonos"));
     if (clipped) r.message += " (" + std::to_string (clipped) + " notas fuera del registro sin cambiar)";
     return r;
 }
@@ -219,6 +231,7 @@ OpResult ProjectController::setArticulation (int fromBar, int toBar, Articulatio
 {
     if (! hasSequence()) return OpResult::fail ("No hay solo");
     auto s = state.history.current();
+    normaliseBarRange (fromBar, toBar, s.bars);
     const int64_t barT = s.timeSignature.ticksPerBar(), beat = s.timeSignature.ticksPerBeat();
     const auto locked = lockedBarsFor (s.bars);
     const auto inst = state.settings.instrument;

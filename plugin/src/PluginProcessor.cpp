@@ -146,12 +146,13 @@ void SoloAIStudioProcessor::publishAll()
 {
     // Llamar con stateLock tomado (un solo productor por RealtimeSwap).
     const auto& st = project.state;
-    if (st.history.empty()) audio.publishSequence (nullptr);
+    // Solo se republica si cambian las notas, el inicio o el loop: republicar corta la nota que suena.
+    if (st.history.empty()) audio.publishSequenceIfChanged (nullptr, 0, false);
     else
     {
         const auto& seq = st.history.current();
         const int64_t offset = (int64_t) (st.settings.startBar - 1) * seq.timeSignature.ticksPerBar();
-        audio.publishSequence (makePlaybackData (seq, offset, st.settings.loop));
+        audio.publishSequenceIfChanged (&seq, offset, st.settings.loop);
     }
     const FxSettings fx = st.settings.fxEnabled ? st.fx : FxSettings {};
     audio.publishFx (fx);

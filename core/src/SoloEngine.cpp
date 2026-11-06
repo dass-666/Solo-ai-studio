@@ -44,6 +44,20 @@ void SoloEngine::collectGarbage()
     autoSwap.collectGarbage();
 }
 
+bool SoloEngine::publishSequenceIfChanged (const Sequence* seq, int64_t startOffsetTicks, bool loop)
+{
+    if (havePublished && lastHadSeq == (seq != nullptr)
+        && (seq == nullptr || (lastSeq == *seq && lastOffset == startOffsetTicks && lastLoop == loop)))
+        return false;
+    playback.publish (seq ? makePlaybackData (*seq, startOffsetTicks, loop) : nullptr);
+    havePublished = true;
+    lastHadSeq = seq != nullptr;
+    if (seq) lastSeq = *seq;
+    lastOffset = startOffsetTicks;
+    lastLoop = loop;
+    return true;
+}
+
 SoloEngine::BlockResult SoloEngine::process (float* left, float* right, int n, const TransportState& host)
 {
     BlockResult res;

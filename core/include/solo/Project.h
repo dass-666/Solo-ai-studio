@@ -24,6 +24,7 @@ struct OpResult
 enum class Articulation { Vibrato, Bend, Slide, Legato, PalmMute };
 const char* articulationName (Articulation a);
 
+// Rangos de compases en base 0; fromBar = -1 significa «todo el solo».
 class ProjectController
 {
 public:
