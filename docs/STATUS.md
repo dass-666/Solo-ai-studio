@@ -63,3 +63,16 @@ proyecto nuevo con preset «Emotional Lead» mostrado pero efectos vacíos · **
 Picos aislados (un bloque de 11 250, en una posición distinta en cada ejecución) llegan al 5–85 %. Atribuidos al
 reparto de CPU de este contenedor compartido, **sin confirmar**: en Windows con FL Studio hay que medirlo.
 Memoria: `SoloEngine` 3,7 KB + búferes (delay de 4 s, reverb, chorus); pico RSS del proceso de prueba 6,6 MB.
+
+## Preparación para FL Studio (2026-11-06)
+
+Rama `claude/solo-ai-studio-fl-prep` (sale de `88eabdd`). Pruebas nuevas:
+- `engine_irregular_and_oversized_blocks`: bloques de 1 a 8192 muestras habiendo preparado 64, como hace FL a veces. Mismo audio que la exportación, sin desbordes con ASan.
+- `manual_flow_all_styles_and_instruments`: el flujo de la prueba manual en 8 estilos × 4 instrumentos. Cubre generar, bloquear, regenerar, editar, transponer, articular, todos los presets, orden en español, MIDI, WAV y guardar/restaurar. Deshacer hasta el principio y rehacer hasta el final (623 pasos).
+- `exported_wav_contains_the_solo_notes`: el WAV exportado, analizado con el detector de alturas, contiene las notas del solo en los 4 instrumentos (97–100 % con la altura exacta).
+- Host de prueba: un proyecto v2 completo hace la ida y vuelta por el plugin real; los estados truncados o basura se rechazan sin tocar el proyecto.
+- CI: instala el paquete en `C:\Program Files\Common Files\VST3` con el script de instalación y valida la copia instalada.
+
+Defectos corregidos (cada uno con su prueba):
+- Mover cualquier control durante la reproducción cortaba la nota que sonaba, que además no se reanudaba. Causa: el plugin republicaba la secuencia aunque no cambiara.
+- Transponer y añadir o quitar articulaciones sin compases elegidos fallaba siempre. Causa: el rango −1 («todo el solo») no se interpretaba.
