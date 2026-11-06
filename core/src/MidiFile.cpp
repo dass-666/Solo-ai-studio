@@ -1,4 +1,5 @@
 #include "solo/MidiFile.h"
+#include "solo/Expression.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -116,16 +117,21 @@ std::vector<RawEvent> noteEvents (const Sequence& seqIn, const MidiExportOptions
         }
         const double secPerTick = 60.0 / ((seq.bpm > 0 ? seq.bpm : 120.0) * kPPQ);
         const int step = std::max (5, opts.bendResolutionTicks);
+        const bool useGestures = opts.expressionPercent >= 0.0;
+        const ExpressionScaling scaling = expressionScaling (useGestures ? opts.expressionPercent : 65.0);
         for (size_t i = 0; i < seq.notes.size(); ++i)
         {
             const auto& n = seq.notes[i];
             const auto& e = n.expr;
             if (e.bendType == BendType::None && e.vibratoDepth <= 0 && e.slideFrom == 0) continue;
             const double lenSec = (double) n.lengthTicks * secPerTick;
+            const NoteGestures g = gesturesFor (e, n.velocity, lenSec, scaling, true);
+            if (useGestures && ! g.hasPitchGestures()) continue; // p. ej. Expresión 0 %: nota sin curva
             int lastValue = 1 << 30;
             for (int64_t t = 0; t < n.lengthTicks; t += step)
             {
-                const double semis = expressionOffsetSemis (e, (double) t * secPerTick, lenSec, true);
+                const double semis = useGestures ? gesturePitchOffset (g, (double) t * secPerTick)
+                                                 : expressionOffsetSemis (e, (double) t * secPerTick, lenSec, true);
                 const int v = (int) std::lround (std::clamp (semis / range, -1.0, 1.0) * 8191.0);
                 if (std::abs (v - lastValue) < 8) continue;
                 // orden 4: después del note-on del mismo tick (la curva empieza con la nota)

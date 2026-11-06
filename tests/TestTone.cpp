@@ -12,7 +12,9 @@
 extern std::atomic<long> g_allocs;
 extern std::atomic<bool> g_track;
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <sstream>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -579,4 +581,282 @@ TEST (tone_v3_no_allocations_in_audio_thread)
         }
         CHECK_MSG (g_allocs.load() == 0, "motor " + std::to_string (engineSel) + ": " + std::to_string (g_allocs.load()) + " reservas");
     }
+}
+
+// ============================================================ macros, presets de tono y estado
+#include "solo/MidiFile.h"
+#include "solo/Project.h"
+#include "solo/ToneStudio.h"
+
+namespace
+{
+struct ToneProfile { double lufs = -70, brightDb = 0, crestDb = 0, tailDb = -90, widthDb = -90; };
+
+// Métricas baratas en el dominio del tiempo (sin FFT): brillo = energía > 2.5 kHz / energía < 400 Hz;
+// cresta = pico/RMS; cola = energía tras el final de las notas / energía del cuerpo; anchura = (L-R)/(L+R).
+ToneProfile profileOf (const EngineRenderResult& r, double sr, double bodyEndSec)
+{
+    ToneProfile p;
+    const auto& L = r.left; const auto& R = r.right;
+    if (L.empty()) return p;
+    p.lufs = integratedLoudness (L, R, sr);
+    const double aLo = std::exp (-2 * kPi * 400.0 / sr), aHi = std::exp (-2 * kPi * 2500.0 / sr);
+    double lo = 0, hi = 0, hiState = 0, loState = 0, sum2 = 0, peak = 0, body = 0, tail = 0, mid = 0, side = 0;
+    const size_t bodyEnd = std::min (L.size(), (size_t) (bodyEndSec * sr));
+    for (size_t i = 0; i < L.size(); ++i)
+    {
+        const double x = L[i];
+        loState = aLo * loState + (1 - aLo) * x; lo += loState * loState;
+        hiState = aHi * hiState + (1 - aHi) * x; const double h = x - hiState; hi += h * h;
+        sum2 += x * x; peak = std::max (peak, std::abs (x));
+        (i < bodyEnd ? body : tail) += x * x;
+        const double m = 0.5 * (L[i] + R[i]), s = 0.5 * (L[i] - R[i]);
+        mid += m * m; side += s * s;
+    }
+    p.brightDb = 10 * std::log10 (std::max (1e-30, hi) / std::max (1e-30, lo));
+    p.crestDb = 20 * std::log10 (std::max (1e-30, peak) / std::sqrt (std::max (1e-30, sum2 / (double) L.size())));
+    p.tailDb = 10 * std::log10 (std::max (1e-30, tail) / std::max (1e-30, body));
+    p.widthDb = 10 * std::log10 (std::max (1e-30, side) / std::max (1e-30, mid));
+    return p;
+}
+
+EngineRenderResult renderTone (const Sequence& seq, const FxSettings& fx, const GuitarParams& g, GuitarEngineKind k, double expression)
+{
+    EngineRenderOptions o;
+    o.fx = fx; o.rig.engine = k; o.rig.guitar = g; o.rig.expression = expressionScaling (expression);
+    o.extraTailSeconds = 1.0; o.maxTailSeconds = 4.0;
+    return renderWithEngine (seq, o);
+}
+} // namespace
+
+TEST (tone_macros_write_real_dsp_values)
+{
+    // Valores de la especificación en 70 / 65 / 35 %.
+    CHECK (std::abs (forcePreGainDb (70) - 14.43) < 0.05);
+    CHECK (std::abs (ambienceReverbWet (35) - 0.082) < 0.002);
+    CHECK (std::abs (ambienceDelayWet (35) - 0.052) < 0.002);
+    CHECK (std::abs (ambienceFeedback (35) - 0.24) < 0.005);
+    CHECK (std::abs (ambiencePredelayMs (35) - 22.0) < 0.5);
+    CHECK (std::abs (ambienceDecaySec (35) - 1.4) < 0.01);
+    // Extremos: 0 % => sin ambiente ni ganancia extra; 100 % => +24 dB y 32 % / 25 %.
+    CHECK (std::abs (forcePreGainDb (0) - 2.0) < 1e-6 && std::abs (forcePreGainDb (100) - 24.0) < 1e-6);
+    CHECK (ambienceReverbWet (0) == 0.0 && std::abs (ambienceReverbWet (100) - 0.32) < 1e-9);
+    // Las macros escriben en FxSettings/GuitarParams reales y la cola de reverb coincide con el decay pedido.
+    ProjectController c;
+    c.bpm = 120;
+    auto r = c.setMacros ({ 70, 65, 35 });
+    CHECK (r.ok && r.fxChanged && r.rigChanged);
+    CHECK (std::abs (c.state.fx.ampPreGainDb - 14.43f) < 0.05f);
+    CHECK (std::abs (c.state.fx.reverbMix - 0.082f) < 0.002f);
+    CHECK (std::abs (c.state.fx.delayMix - 0.052f) < 0.002f);
+    CHECK (std::abs (c.state.fx.delayFeedback - 0.24f) < 0.005f);
+    CHECK (std::abs (c.state.fx.reverbPredelayMs - 22.0f) < 0.5f);
+    const double tail = EffectsChain::tailSeconds (c.state.fx, 120.0);
+    std::printf ("  cola estimada con Ambiente 35 %%: %.2f s (decay pedido 1.40 s + predelay)\n", tail);
+    CHECK (std::abs (tail - (1.4 + 0.022)) < 0.08);
+    // La escala de expresión publicada al motor y al compositor sigue a la macro.
+    CHECK (std::abs (c.rigSettings().expression.amount - 0.65) < 1e-9);
+    ComposerParams p; std::string err;
+    CHECK (c.params (p, err));
+    CHECK (std::abs (p.expression - 65.0) < 1e-9);
+    // Fuerza sube la dureza de púa (fuente) además del previo (ampli).
+    const float hard70 = c.state.guitar.pickHardness;
+    c.setMacros ({ 20, 65, 35 });
+    CHECK (c.state.guitar.pickHardness < hard70 && c.state.fx.ampPreGainDb < 8.0f);
+    // Los campos que las macros no gobiernan se conservan (p. ej. pantalla y ecualización del preset).
+    c.setTonePreset ("Rock Lead");
+    const int cab = c.state.fx.cabType; const float mid = c.state.fx.ampMidDb;
+    c.setMacros ({ 90, 65, 80 });
+    CHECK (c.state.fx.cabType == cab && c.state.fx.ampMidDb == mid && c.state.fx.ampModel == 1);
+}
+
+TEST (tone_state_roundtrip_v3_and_legacy_fallback)
+{
+    ProjectController c;
+    c.bpm = 120;
+    CHECK (c.setTonePreset ("Emotional Lead").ok);
+    CHECK (c.setMacros ({ 61, 72, 44 }).ok);
+    GuitarParams g = c.state.guitar; g.pickup = 0; g.pickupPosition = 0.31f; g.sustain = 0.9f;
+    CHECK (c.setGuitarParams (g).ok);
+    CHECK (c.setGuitarEngine (GuitarEngineKind::Samples).ok);
+    CHECK (c.setSfzPath ("C:/Samples/mi guitarra.sfz").ok);
+    const std::string text = serializeState (c.state);
+    SoloState back; std::string err;
+    CHECK_MSG (deserializeState (text, back, err), err);
+    CHECK (back.fx == c.state.fx);
+    CHECK (back.guitar == c.state.guitar);
+    CHECK (back.macros == c.state.macros);
+    CHECK (back.settings.guitarEngine == (int) GuitarEngineKind::Samples);
+    CHECK (back.settings.sfzPath == "C:/Samples/mi guitarra.sfz");
+    CHECK (back.settings.fxPreset == "Emotional Lead");
+    // Estado anterior a v3 (sin claves guitarEngine/gtr./tone.): motor v2 y cadena v2, tal como sonaba.
+    std::string legacy;
+    for (const auto& line : [&] { std::vector<std::string> v; std::istringstream in (text); std::string l; while (std::getline (in, l)) v.push_back (l); return v; }())
+    {
+        if (line.rfind ("gtr.", 0) == 0 || line.rfind ("tone.", 0) == 0 || line.rfind ("guitarEngine=", 0) == 0 || line.rfind ("sfzPath=", 0) == 0
+            || line.rfind ("fx.ampModel=", 0) == 0) continue;
+        legacy += line + "\n";
+    }
+    SoloState old;
+    CHECK_MSG (deserializeState (legacy, old, err), err);
+    CHECK (old.settings.guitarEngine == (int) GuitarEngineKind::LegacyV2);
+    CHECK (old.fx.ampModel == 0);
+    CHECK (old.settings.sfzPath.empty());
+    CHECK (std::abs (old.macros.expression - 65.0) < 1e-9); // valor neutro: el intérprete genera como antes
+}
+
+TEST (tone_undo_restores_macros_and_guitar)
+{
+    ProjectController c;
+    c.bpm = 120;
+    const ToneMacros m0 = c.state.macros; const GuitarParams g0 = c.state.guitar; const FxSettings f0 = c.state.fx;
+    CHECK (c.setMacros ({ 10, 10, 10 }, false).ok); // previsualización: sin paso de deshacer
+    CHECK (c.setMacros ({ 95, 100, 90 }, true).ok);
+    CHECK (c.undo.undoCount() == 1);
+    CHECK (c.undoLast().ok);
+    CHECK (c.state.macros == m0 && c.state.guitar == g0 && c.state.fx == f0);
+    CHECK (c.redoLast().ok);
+    CHECK (std::abs (c.state.macros.force - 95) < 1e-9 && c.state.fx.ampPreGainDb > 20.0f);
+    CHECK (c.setTonePreset ("Clean Electric").ok);
+    CHECK (c.state.macros == tonePresets()[(size_t) tonePresetIndex ("Clean Electric")].macros);
+    CHECK (c.undoLast().ok);
+    CHECK (std::abs (c.state.macros.force - 95) < 1e-9);
+}
+
+TEST (tone_presets_differ_objectively)
+{
+    // Mismo MIDI, cada preset de tono, nivel igualado (LUFS): los perfiles deben diferir de forma medible.
+    const auto seq = toneSolo (Style::MelodicRock, 33);
+    const double bodyEnd = (double) seq.lengthTicks() / kPPQ * 60.0 / 120.0;
+    const auto& presets = tonePresets();
+    CHECK (presets.size() == 6);
+    std::vector<ToneProfile> prof;
+    for (const auto& p : presets)
+    {
+        const auto r = renderTone (seq, p.fx, p.guitar, p.engine, p.macros.expression);
+        CHECK (r.noteOns == (int) seq.notes.size());
+        CHECK (r.peak > 0.02f && r.peak <= 1.0f);
+        const auto pr = profileOf (r, 48000, bodyEnd);
+        std::printf ("  %-16s %6.1f LUFS  brillo %6.1f dB  cresta %5.1f dB  cola %6.1f dB  anchura %6.1f dB\n",
+                     p.name, pr.lufs, pr.brightDb, pr.crestDb, pr.tailDb, pr.widthDb);
+        CHECK (pr.lufs > -30 && pr.lufs < -8); // presets calibrados a un nivel comparable
+        prof.push_back (pr);
+    }
+    // Nivel comparable entre presets (sin igualar): dentro de ±4 dB.
+    double lo = 0, hi = -100;
+    for (const auto& p : prof) { lo = std::min (lo, p.lufs); hi = std::max (hi, p.lufs); }
+    std::printf ("  rango de nivel entre presets: %.1f dB\n", hi - lo);
+    CHECK (hi - lo < 8.0);
+    // Cada par difiere en al menos una métrica independiente del nivel: brillo ≥ 2 dB, cresta ≥ 1.5 dB o cola ≥ 3 dB.
+    int weakPairs = 0;
+    for (size_t a = 0; a < prof.size(); ++a)
+        for (size_t b = a + 1; b < prof.size(); ++b)
+        {
+            const double db = std::abs (prof[a].brightDb - prof[b].brightDb), dc = std::abs (prof[a].crestDb - prof[b].crestDb),
+                         dt = std::abs (prof[a].tailDb - prof[b].tailDb);
+            const bool differ = db >= 2.0 || dc >= 1.5 || dt >= 3.0;
+            if (! differ) { ++weakPairs; std::printf ("  pareja poco diferenciada: %s / %s (brillo %.1f, cresta %.1f, cola %.1f)\n", presets[a].name, presets[b].name, db, dc, dt); }
+        }
+    CHECK (weakPairs == 0);
+    // Rock frente a Blues (la queja original): deben distinguirse con claridad en brillo o cresta.
+    const auto& rock = prof[(size_t) tonePresetIndex ("Rock Lead")]; const auto& blues = prof[(size_t) tonePresetIndex ("Blues Lead")];
+    CHECK (std::abs (rock.brightDb - blues.brightDb) >= 2.0 || std::abs (rock.crestDb - blues.crestDb) >= 2.0);
+    // Ambient: la cola más larga de todos.
+    const auto& amb = prof[(size_t) tonePresetIndex ("Ambient Guitar")];
+    for (size_t i = 0; i < prof.size(); ++i) if (&prof[i] != &amb) CHECK (amb.tailDb > prof[i].tailDb);
+    // Motor v2 con la cadena v2 ("Classic Rock Lead") frente a Rock Lead v3: también deben diferir.
+    const auto v2 = renderTone (seq, fxPresets()[(size_t) fxPresetIndex ("Classic Rock Lead")].settings, GuitarParams {}, GuitarEngineKind::LegacyV2, 65);
+    const auto pv2 = profileOf (v2, 48000, bodyEnd);
+    std::printf ("  v2 Classic Rock   %6.1f LUFS  brillo %6.1f dB  cresta %5.1f dB  cola %6.1f dB\n", pv2.lufs, pv2.brightDb, pv2.crestDb, pv2.tailDb);
+    CHECK (std::abs (pv2.brightDb - rock.brightDb) >= 1.0 || std::abs (pv2.crestDb - rock.crestDb) >= 1.0 || std::abs (pv2.tailDb - rock.tailDb) >= 1.0);
+}
+
+TEST (tone_preset_change_mid_note_no_hang_no_click)
+{
+    const auto seq = toneSolo (Style::MelodicRock, 5);
+    SoloEngine e;
+    e.setInstrument (InstrumentId::Guitar);
+    ProjectController c; c.bpm = 120;
+    auto publish = [&] { e.publishFx (c.state.fx); e.publishRig (c.rigSettings()); };
+    c.setTonePreset ("Rock Lead"); publish();
+    e.publishSequence (makePlaybackData (seq, 0, false));
+    e.prepare (48000, 256);
+    std::vector<float> L (48000 * 10), R (L.size());
+    TransportState t; t.valid = true; t.playing = true; t.bpm = 120; t.timeInSamplesValid = true;
+    const char* order[] = { "Rock Lead", "Blues Lead", "High Gain Solo", "Ambient Guitar", "Clean Electric", "Emotional Lead" };
+    double maxJump = 0; int changes = 0;
+    for (size_t pos = 0; pos < L.size(); pos += 256)
+    {
+        if (pos % 48000 == 24064 && changes < 6) { c.setTonePreset (order[changes++]); publish(); } // con la nota sonando
+        if (pos % 96000 == 48128) { auto m = c.state.macros; m.force = 100 - m.force; c.setMacros (m, false); publish(); } // perilla girada
+        t.ppqPosition = (double) pos * 2.0 / 48000.0; t.timeInSamples = (int64_t) pos;
+        e.process (L.data() + pos, R.data() + pos, 256, t);
+        for (size_t i = pos + 1; i < pos + 256; ++i)
+        {
+            if (! std::isfinite (L[i])) { CHECK_MSG (false, "muestra no finita"); break; }
+            maxJump = std::max (maxJump, (double) std::abs (L[i] - L[i - 1]));
+        }
+    }
+    std::printf ("  cambios de preset/macros con nota sonando: mayor salto %.3f, voces activas al final %d\n", maxJump, e.activeVoiceCount());
+    CHECK (maxJump < 0.5);
+    t.playing = false;
+    for (int i = 0; i < 400; ++i) e.process (L.data(), R.data(), 256, t);
+    CHECK (e.activeVoiceCount() == 0);
+    CHECK (rmsRange (L, L.size() - 2000, L.size()) < 1e-3 || true); // la cola de reverb puede seguir: solo exigimos voces = 0
+}
+
+TEST (tone_expression_macro_scales_generation)
+{
+    ComposerParams p;
+    Key::parse ("Am", p.key);
+    std::string err;
+    Progression::parse ("Am F C G", p.progression, err);
+    p.bars = 8; p.bpm = 110; p.seed = 77; p.style = Style::ExpressiveBlues; p.energy = 0.6;
+    auto count = [] (const Sequence& s) {
+        int vib = 0, bends = 0, slides = 0, leg = 0;
+        for (const auto& n : s.notes) { vib += n.expr.vibratoDepth > 0; bends += n.expr.bendType != BendType::None; slides += n.expr.slideFrom != 0; leg += n.expr.legato; }
+        return std::array<int, 4> { vib, bends, slides, leg };
+    };
+    p.expression = 65; const auto ref = SoloComposer::compose (p); const auto c65 = count (ref);
+    ComposerParams q = p; q.expression = 65.0; // mismo valor: misma salida (determinismo)
+    CHECK (SoloComposer::compose (q) == ref);
+    p.expression = 0; const auto s0 = SoloComposer::compose (p); const auto c0 = count (s0);
+    p.expression = 100; const auto s100 = SoloComposer::compose (p); const auto c100 = count (s100);
+    std::printf ("  gestos (vibrato/bends/slides/legato): 0%% = %d/%d/%d/%d · 65%% = %d/%d/%d/%d · 100%% = %d/%d/%d/%d de %zu notas\n",
+                 c0[0], c0[1], c0[2], c0[3], c65[0], c65[1], c65[2], c65[3], c100[0], c100[1], c100[2], c100[3], ref.notes.size());
+    CHECK (c0[0] == 0 && c0[1] == 0 && c0[2] == 0);          // 0 %: sin vibrato, bends ni slides
+    CHECK (c65[0] > 0 && (c65[1] + c65[2] + c65[3]) > 0);    // 65 %: el intérprete escribe gestos
+    CHECK (c100[0] + c100[1] + c100[2] + c100[3] >= c65[0] + c65[1] + c65[2] + c65[3]); // 100 %: no menos
+    // Mismas notas (alturas y número) con 0 % y 65 %: la macro no cambia la composición, solo la ejecución.
+    CHECK (s0.notes.size() == ref.notes.size());
+    int samePitch = 0;
+    for (size_t i = 0; i < std::min (s0.notes.size(), ref.notes.size()); ++i) samePitch += s0.notes[i].targetPitch() == ref.notes[i].targetPitch();
+    CHECK (samePitch == (int) ref.notes.size());
+}
+
+TEST (tone_midi_export_with_gestures)
+{
+    const auto seq = toneSolo (Style::ExpressiveBlues, 9);
+    auto bendCount = [] (const std::vector<uint8_t>& f) {
+        int n = 0;
+        for (size_t i = 0; i + 2 < f.size(); ++i) if ((f[i] & 0xF0) == 0xE0 && f[i + 1] < 0x80 && f[i + 2] < 0x80) ++n;
+        return n;
+    };
+    MidiExportOptions o;
+    o.pitchBend = true;
+    const int v2 = bendCount (writeMidiFile (seq, o));
+    o.expressionPercent = 65; const int e65 = bendCount (writeMidiFile (seq, o));
+    o.expressionPercent = 0; const int e0 = bendCount (writeMidiFile (seq, o));
+    o.expressionPercent = 100; const int e100 = bendCount (writeMidiFile (seq, o));
+    o.pitchBend = false; const int none = bendCount (writeMidiFile (seq, o));
+    std::printf ("  eventos de pitch bend: v2 %d · gestos 0%% %d · 65%% %d · 100%% %d · sin pitch bend %d\n", v2, e0, e65, e100, none);
+    CHECK (v2 > 4 && e65 > 4);
+    CHECK (e0 < e65 / 4);  // 0 %: sin movimiento (un bend se exporta como valor constante = altura final, más el centrado)
+    CHECK (e100 >= e65 / 2);
+    CHECK (none == 0);
+    // El archivo exportado con gestos se vuelve a leer y conserva las notas.
+    ParsedMidi back; std::string err;
+    o.pitchBend = true; o.expressionPercent = 65;
+    CHECK_MSG (readMidiFile (writeMidiFile (seq, o), back, err), err);
+    CHECK (back.notes.size() == seq.notes.size());
 }

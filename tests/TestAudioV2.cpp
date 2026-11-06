@@ -9,6 +9,7 @@
 #include "solo/MidiFile.h"
 #include "solo/SoloEngine.h"
 #include "solo/StateManager.h"
+#include "solo/ToneStudio.h"
 
 #include <algorithm>
 #include <limits>
@@ -539,10 +540,22 @@ TEST (midi_reader_rejects_bad_timesig_and_tempo)
 TEST (default_state_fx_match_named_preset)
 {
     SoloState st;
-    const int i = fxPresetIndex (st.settings.fxPreset);
-    CHECK (i >= 0);
     CHECK (st.settings.fxEnabled);
-    CHECK (i >= 0 && st.fx == fxPresets()[(size_t) i].settings);
+    // v3: el proyecto nuevo arranca con un preset de TONO (fx + guitarra + macros + motor); el nombre debe existir
+    // y los valores deben ser exactamente los del preset.
+    const int t = tonePresetIndex (st.settings.fxPreset);
+    const int i = fxPresetIndex (st.settings.fxPreset);
+    CHECK (t >= 0 || i >= 0);
+    if (t >= 0)
+    {
+        const auto& p = tonePresets()[(size_t) t];
+        CHECK (st.fx == p.fx);
+        CHECK (st.guitar == p.guitar);
+        CHECK (st.macros == p.macros);
+        CHECK (st.settings.guitarEngine == (int) p.engine);
+        CHECK (st.fx.ampModel == 1);
+    }
+    else CHECK (st.fx == fxPresets()[(size_t) i].settings);
 }
 
 // Defecto encontrado al investigar picos de CPU: las colas de reverb/delay/filtros generaban números

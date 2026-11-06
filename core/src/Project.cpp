@@ -32,7 +32,9 @@ void normaliseBarRange (int& fromBar, int& toBar, int bars)
 
 bool ProjectController::params (ComposerParams& out, std::string& error) const
 {
-    return state.settings.toComposerParams (bpm, out, error);
+    if (! state.settings.toComposerParams (bpm, out, error)) return false;
+    out.expression = state.macros.expression;
+    return true;
 }
 
 std::vector<bool> ProjectController::lockedBarsFor (int bars) const
@@ -443,6 +445,89 @@ OpResult ProjectController::generateFromDNA (const DerivedOptions& o, uint64_t s
     return pushVariation (s, seed, std::string ("ADN: ") + derivedModeName (o.mode), std::string ("ADN (") + derivedModeName (o.mode) + ")");
 }
 
+// ======================================================================== Guitar Tone Studio v3
+OpResult ProjectController::setMacros (const ToneMacros& mIn, bool rememberStep)
+{
+    ToneMacros m = mIn;
+    m.sanitise();
+    if (rememberStep)
+    {
+        if (macroPreviewPending) { macroPreviewBefore.label = "Macros de tono"; undo.push (macroPreviewBefore); macroPreviewPending = false; }
+        else remember ("Macros de tono");
+    }
+    else if (! macroPreviewPending) { macroPreviewBefore = snapshotOf (state, "Macros de tono"); macroPreviewPending = true; }
+    state.macros = m;
+    applyMacros (m, state.fx, state.guitar);
+    state.settings.fxEnabled = true;
+    OpResult r;
+    r.ok = true;
+    r.fxChanged = r.rigChanged = true;
+    r.message = "Fuerza " + std::to_string ((int) std::lround (m.force)) + " % · Expresión " + std::to_string ((int) std::lround (m.expression))
+                + " % · Ambiente " + std::to_string ((int) std::lround (m.ambience)) + " %";
+    return r;
+}
+
+OpResult ProjectController::setTonePreset (const std::string& name)
+{
+    const int i = tonePresetIndex (name);
+    if (i < 0) return OpResult::fail ("Preset de tono desconocido: " + name);
+    remember ("Preset de tono");
+    const auto& p = tonePresets()[(size_t) i];
+    state.fx = p.fx;
+    state.guitar = p.guitar;
+    state.macros = p.macros;
+    state.settings.guitarEngine = (int) p.engine;
+    state.settings.fxEnabled = true;
+    state.settings.fxPreset = name;
+    if (p.performer != PerformerProfile::Auto) state.settings.performer = p.performer;
+    OpResult r;
+    r.ok = true;
+    r.fxChanged = r.rigChanged = r.settingsChanged = true;
+    r.message = std::string ("Tono: ") + name + " (" + p.description + ")";
+    return r;
+}
+
+OpResult ProjectController::setGuitarParams (const GuitarParams& g, const std::string& label)
+{
+    remember (label);
+    state.guitar = g;
+    state.guitar.sanitise();
+    OpResult r;
+    r.ok = true;
+    r.rigChanged = true;
+    r.message = label;
+    return r;
+}
+
+OpResult ProjectController::setGuitarEngine (GuitarEngineKind k)
+{
+    state.settings.guitarEngine = std::clamp ((int) k, 0, kNumGuitarEngines - 1);
+    OpResult r;
+    r.ok = true;
+    r.rigChanged = r.settingsChanged = true;
+    r.message = std::string ("Motor de guitarra: ") + guitarEngineName ((GuitarEngineKind) state.settings.guitarEngine);
+    return r;
+}
+
+OpResult ProjectController::setSfzPath (const std::string& path)
+{
+    state.settings.sfzPath = path;
+    OpResult r;
+    r.ok = true;
+    r.rigChanged = r.settingsChanged = true;
+    r.message = path.empty() ? "Sin biblioteca de samples" : "Biblioteca SFZ: " + path;
+    return r;
+}
+
+GuitarRigSettings ProjectController::rigSettings() const
+{
+    GuitarRigSettings r;
+    r.engine = (GuitarEngineKind) std::clamp (state.settings.guitarEngine, 0, kNumGuitarEngines - 1);
+    r.guitar = state.guitar;
+    r.expression = expressionScaling (state.macros.expression);
+    return r;
+}
+
 OpResult ProjectController::undoLast()
 {
     ProjectSnapshot cur = snapshotOf (state, "");
@@ -450,7 +535,7 @@ OpResult ProjectController::undoLast()
     applySnapshot (state, cur);
     OpResult r;
     r.ok = true;
-    r.sequenceChanged = r.fxChanged = true;
+    r.sequenceChanged = r.fxChanged = r.rigChanged = true;
     r.message = "Deshecho: " + cur.label;
     return r;
 }
@@ -462,7 +547,7 @@ OpResult ProjectController::redoLast()
     applySnapshot (state, cur);
     OpResult r;
     r.ok = true;
-    r.sequenceChanged = r.fxChanged = true;
+    r.sequenceChanged = r.fxChanged = r.rigChanged = true;
     r.message = "Rehecho: " + cur.label;
     return r;
 }

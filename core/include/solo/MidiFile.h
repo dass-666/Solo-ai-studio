@@ -20,6 +20,9 @@ struct MidiExportOptions
     bool pitchBend = true;
     int bendRangeSemitones = 12;
     int bendResolutionTicks = 20;  // cada cuánto se muestrea la curva
+    // v3: si >= 0, las curvas se calculan con gesturesFor()/gesturePitchOffset() escaladas por la macro Expresión,
+    // de modo que el pitch bend exportado coincide con lo que suena. -1 = curva v2 (NoteExpression sin escalar).
+    double expressionPercent = -1.0;
     // Legato: alarga la nota anterior unos ticks para que los sintes en modo mono/portamento liguen.
     bool legatoOverlap = true;
     // Marcas de texto informativas (PM = palm mute, H/P = hammer/pull, BU = bend). Ningún sinte las interpreta.

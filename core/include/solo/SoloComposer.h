@@ -111,6 +111,7 @@ struct ComposerParams
     uint64_t motifSeed = 0;  // 0 = derivada de 'seed'. Fijarla conserva los motivos entre variaciones.
     std::string sectionPlan; // vacío = automático; o p. ej. "P2 D2 T2 C1 R1" (P,D,T,C,R + compases)
     PerformerProfile performer = PerformerProfile::Auto;
+    double expression = 65.0; // macro Expresión (0..100): cuánta tendencia tiene el intérprete a escribir gestos
 
     // Material temático externo (Creative DNA / voz).
     std::vector<SeedMotif> seedMotifs;

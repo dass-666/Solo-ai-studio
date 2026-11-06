@@ -77,6 +77,8 @@ void writeSettings (std::ostringstream& o, const SoloSettings& s)
     o << "freedom=" << fmt (s.freedom) << "\n";
     o << "fxPreset=" << oneLine (s.fxPreset) << "\n";
     o << "fxEnabled=" << (s.fxEnabled ? 1 : 0) << "\n";
+    o << "guitarEngine=" << s.guitarEngine << "\n";
+    o << "sfzPath=" << oneLine (s.sfzPath) << "\n";
 }
 
 // Aplica pares clave=valor validando rangos. Las claves desconocidas se ignoran (compatibilidad futura).
@@ -133,6 +135,8 @@ bool applySetting (SoloSettings& s, const std::string& k, const std::string& v, 
     else if (k == "freedom") { if (! num()) return false; s.freedom = std::clamp (d, 0.0, 1.0); }
     else if (k == "fxPreset") { s.fxPreset = v; }
     else if (k == "fxEnabled") { if (! integer (0, 1)) return false; s.fxEnabled = i == 1; }
+    else if (k == "guitarEngine") { if (! integer (0, kNumGuitarEngines - 1)) return false; s.guitarEngine = (int) i; }
+    else if (k == "sfzPath") { s.sfzPath = v; }
     return true;
 }
 
@@ -232,8 +236,46 @@ bool SoloSettings::toComposerParams (double bpm, ComposerParams& p, std::string&
 
 SoloState::SoloState()
 {
-    const int i = fxPresetIndex (settings.fxPreset);
-    if (i >= 0) fx = fxPresets()[(size_t) i].settings;
+    const int t = tonePresetIndex (settings.fxPreset);
+    if (t >= 0)
+    {
+        const auto& p = tonePresets()[(size_t) t];
+        fx = p.fx; guitar = p.guitar; macros = p.macros; settings.guitarEngine = (int) p.engine;
+        if (p.performer != PerformerProfile::Auto) settings.performer = p.performer;
+    }
+    else
+    {
+        const int i = fxPresetIndex (settings.fxPreset);
+        if (i >= 0) fx = fxPresets()[(size_t) i].settings;
+    }
+}
+
+static void writeGuitar (std::ostream& o, const GuitarParams& g, const ToneMacros& m)
+{
+    auto f = [] (double v) { std::ostringstream s; s.imbue (std::locale::classic()); s.precision (6); s << v; return s.str(); };
+    o << "gtr.pickup=" << g.pickup << "\n" << "gtr.pickupPosition=" << f (g.pickupPosition) << "\n" << "gtr.brightness=" << f (g.brightness) << "\n"
+      << "gtr.pickHardness=" << f (g.pickHardness) << "\n" << "gtr.sustain=" << f (g.sustain) << "\n" << "gtr.stiffness=" << f (g.stiffness) << "\n"
+      << "gtr.bodyResonance=" << f (g.bodyResonance) << "\n" << "gtr.palmMuteDamp=" << f (g.palmMuteDamp) << "\n" << "gtr.gainDb=" << f (g.gainDb) << "\n";
+    o << "tone.force=" << f (m.force) << "\n" << "tone.expression=" << f (m.expression) << "\n" << "tone.ambience=" << f (m.ambience) << "\n";
+}
+
+static bool applyGuitarSetting (GuitarParams& g, ToneMacros& m, const std::string& key, const std::string& v)
+{
+    double d = 0;
+    if (! toDouble (v, d)) return false;
+    if (key == "gtr.pickup") g.pickup = (int) d;
+    else if (key == "gtr.pickupPosition") g.pickupPosition = (float) d;
+    else if (key == "gtr.brightness") g.brightness = (float) d;
+    else if (key == "gtr.pickHardness") g.pickHardness = (float) d;
+    else if (key == "gtr.sustain") g.sustain = (float) d;
+    else if (key == "gtr.stiffness") g.stiffness = (float) d;
+    else if (key == "gtr.bodyResonance") g.bodyResonance = (float) d;
+    else if (key == "gtr.palmMuteDamp") g.palmMuteDamp = (float) d;
+    else if (key == "gtr.gainDb") g.gainDb = (float) d;
+    else if (key == "tone.force") m.force = d;
+    else if (key == "tone.expression") m.expression = d;
+    else if (key == "tone.ambience") m.ambience = d;
+    return true; // claves desconocidas: se ignoran
 }
 
 std::string serializeState (const SoloState& s)
@@ -243,6 +285,7 @@ std::string serializeState (const SoloState& s)
     o << kStateMagic << " " << SoloState::kVersion << "\n";
     writeSettings (o, s.settings);
     o << serializeFx (s.fx);
+    writeGuitar (o, s.guitar, s.macros);
     o << "lockedBars=";
     for (bool b : s.lockedBars) o << (b ? '1' : '0');
     o << "\n";
@@ -276,6 +319,7 @@ std::string serializeState (const SoloState& s)
 
 bool deserializeState (const std::string& text, SoloState& out, std::string& error)
 {
+    bool sawGuitarEngine = false;
     const auto ls = lines (text);
     if (ls.empty()) { error = "Estado vacío"; return false; }
     int version = 0;
@@ -288,6 +332,11 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
         if (version > SoloState::kVersion) { error = "Estado creado por una versión más nueva (" + std::to_string (version) + ")"; return false; }
     }
     SoloState s; // se construye aparte y solo se copia si todo es válido
+    // Valores neutros: lo que el texto no traiga queda como en v2 (un estado antiguo no hereda el preset de tono v3).
+    s.fx = FxSettings {};
+    s.guitar = GuitarParams {};
+    s.macros = ToneMacros {};
+    s.settings.guitarEngine = (int) GuitarEngineKind::LegacyV2;
     if (version < 2)
     {
         // S0–S2 no tenía efectos ni intérprete: se conserva el sonido "seco" y el compositor antiguo
@@ -398,6 +447,12 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
             if (! applyFxSetting (s.fx, key.substr (3), val)) { error = "Valor de efecto inválido: " + key; return false; }
             continue;
         }
+        if (key.rfind ("gtr.", 0) == 0 || key.rfind ("tone.", 0) == 0)
+        {
+            if (! applyGuitarSetting (s.guitar, s.macros, key, val)) { error = "Valor de guitarra inválido: " + key; return false; }
+            continue;
+        }
+        if (key == "guitarEngine") sawGuitarEngine = true;
         if (key == "lockedBars")
         {
             if (val.size() > 64) { error = "Bloqueos inválidos"; return false; }
@@ -422,6 +477,10 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
     if (! sawEnd) { error = "Estado truncado (falta 'end')"; return false; }
     if ((int) items.size() != wantedVariations) { error = "Número de variaciones inconsistente"; return false; }
     s.fx.sanitise();
+    s.guitar.sanitise();
+    s.macros.sanitise();
+    // Estados anteriores a v3 (sin clave guitarEngine): conservan el motor y la cadena v2 tal como sonaban.
+    if (! sawGuitarEngine) s.settings.guitarEngine = (int) GuitarEngineKind::LegacyV2;
     s.history.restore (std::move (items), currentIdx, nextId);
     if (s.history.indexOfId (s.slotA) < 0) s.slotA = 0;
     if (s.history.indexOfId (s.slotB) < 0) s.slotB = 0;
@@ -430,8 +489,8 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
         // v1: las variaciones se generaron con el motor 1; la semilla de motivos no existía.
         s.settings.keepMotifs = false;
     }
-    else if (s.settings.fxEnabled && fxPresetIndex (s.settings.fxPreset) < 0 && ! s.settings.fxPreset.empty()
-             && s.settings.fxPreset != "Personalizado")
+    else if (s.settings.fxEnabled && fxPresetIndex (s.settings.fxPreset) < 0 && tonePresetIndex (s.settings.fxPreset) < 0
+             && ! s.settings.fxPreset.empty() && s.settings.fxPreset != "Personalizado")
     {
         s.settings.fxPreset = "Personalizado";
     }
@@ -539,6 +598,8 @@ ProjectSnapshot snapshotOf (const SoloState& s, const std::string& label)
     ProjectSnapshot p;
     p.history = s.history;
     p.fx = s.fx;
+    p.guitar = s.guitar;
+    p.macros = s.macros;
     p.automation = s.automation;
     p.lockedBars = s.lockedBars;
     p.label = label;
@@ -549,6 +610,8 @@ void applySnapshot (SoloState& s, const ProjectSnapshot& p)
 {
     s.history = p.history;
     s.fx = p.fx;
+    s.guitar = p.guitar;
+    s.macros = p.macros;
     s.automation = p.automation;
     s.lockedBars = p.lockedBars;
 }

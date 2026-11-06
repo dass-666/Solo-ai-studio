@@ -5,6 +5,7 @@
 #include "solo/Effects.h"
 #include "solo/SoloComposer.h"
 #include "solo/SoloEngine.h"
+#include "solo/ToneStudio.h"
 #include <string>
 #include <vector>
 
@@ -40,8 +41,12 @@ struct SoloSettings
     bool keepMotifs = false;   // al generar variaciones, conservar los motivos
     std::string sectionPlan;   // vacío = automático
     double fidelity = 0.5, freedom = 0.5;
-    std::string fxPreset = "Emotional Lead";
+    std::string fxPreset = "Rock Lead"; // preset de efectos (v2) o de tono (v3, ver tonePresets)
     bool fxEnabled = true;
+
+    // v3 Guitar Tone Studio
+    int guitarEngine = 1;      // GuitarEngineKind: 0 motor v2, 1 modelado v3, 2 samples (SFZ)
+    std::string sfzPath;       // biblioteca SFZ del usuario (motor de samples); vacío = ninguna
 
     // Construye los parámetros del compositor; devuelve false con el error si tonalidad/progresión no son válidas.
     bool toComposerParams (double bpm, ComposerParams& out, std::string& error) const;
@@ -50,8 +55,10 @@ struct SoloSettings
 struct SoloState
 {
     static constexpr int kVersion = 2;
-    SoloState(); // los efectos iniciales coinciden con el preset nombrado en settings.fxPreset
+    SoloState(); // efectos, guitarra y macros iniciales = preset de tono "Rock Lead"
     SoloSettings settings;
+    GuitarParams guitar;   // fuente (motores v3); persiste como gtr.clave=valor
+    ToneMacros macros;     // Fuerza / Expresión / Ambiente (última posición aplicada); tone.clave=valor
     VariationHistory history;
     FxSettings fx;
     AutomationSet automation;
@@ -81,6 +88,8 @@ struct ProjectSnapshot
 {
     VariationHistory history;
     FxSettings fx;
+    GuitarParams guitar;
+    ToneMacros macros;
     AutomationSet automation;
     std::vector<bool> lockedBars;
     std::string label; // qué acción produjo el cambio (para la interfaz)

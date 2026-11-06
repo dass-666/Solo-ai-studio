@@ -31,6 +31,7 @@ add_library(solo_core STATIC
     core/src/GuitarAmp.cpp
     core/src/ModeledGuitarEngine.cpp
     core/src/Sampler.cpp
+    core/src/ToneStudio.cpp
     core/src/SoloEngine.cpp
     core/src/Playback.cpp
     core/src/AudioRenderer.cpp

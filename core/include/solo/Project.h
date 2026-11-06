@@ -17,6 +17,7 @@ struct OpResult
     bool sequenceChanged = false; // hay que volver a publicar la reproducción
     bool fxChanged = false;
     bool settingsChanged = false;
+    bool rigChanged = false;      // motor de guitarra, parámetros de la fuente, escala de expresión o banco SFZ
 
     static OpResult fail (std::string m) { OpResult r; r.message = std::move (m); return r; }
 };
@@ -60,6 +61,17 @@ public:
     OpResult adjustFx (AutoTarget target, double delta);  // ± sobre el valor normalizado
     OpResult setFxStage (FxStage stage, bool on);
     OpResult setAutomation (const AutomationSet& a);
+    // ---- Guitar Tone Studio v3 (entran en deshacer salvo el motor y la ruta SFZ)
+    // Macros: escriben valores DSP reales en fx/guitar y la escala de expresión. remember=false para previsualizar
+    // mientras se arrastra la perilla (sin paso de deshacer); al soltar, remember=true crea el paso.
+    // Durante la previsualización (remember=false) se guarda aparte el estado anterior al primer cambio; el commit
+    // (remember=true) crea un único paso de deshacer que vuelve a ese estado.
+    OpResult setMacros (const ToneMacros& m, bool remember = true);
+    OpResult setTonePreset (const std::string& name);  // fx + guitarra + macros + motor
+    OpResult setGuitarParams (const GuitarParams& g, const std::string& label = "Editar guitarra");
+    OpResult setGuitarEngine (GuitarEngineKind k);
+    OpResult setSfzPath (const std::string& path);      // solo guarda la ruta (la carga la hace quien llama)
+    GuitarRigSettings rigSettings() const;              // lo que hay que publicar al motor de audio
     // ---- voz y ADN
     OpResult applyHum (const VoiceAnalysis& va, const HumToSoloOptions& o);
     OpResult applyVocalCorrection (const VoiceAnalysis& take, const HumToSoloOptions& o, int fromBar, int toBar);
@@ -76,6 +88,8 @@ public:
 
 private:
     void remember (const std::string& label) { undo.push (snapshotOf (state, label)); }
+    bool macroPreviewPending = false;
+    ProjectSnapshot macroPreviewBefore;
     OpResult pushVariation (const Sequence& s, uint64_t seed, const std::string& label, const std::string& name = {});
 };
 

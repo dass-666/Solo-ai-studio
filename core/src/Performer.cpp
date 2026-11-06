@@ -2,6 +2,7 @@
 // Determinista: cada nota usa un generador derivado de (semilla, posición, altura), de modo que
 // regenerar unas notas no cambia la interpretación de las demás.
 #include "solo/Performer.h"
+#include "solo/Expression.h"
 #include <algorithm>
 #include <cmath>
 
@@ -90,7 +91,13 @@ void performSequence (Sequence& seq, const ComposerParams& params, PerformerProf
         return;
     }
 
-    const PerformerTraits& t = traitsFor (profile);
+    // Macro Expresión: 65 % = comportamiento de referencia (escala 1.0 exacta); 0 % = sin gestos; 100 % = más tendencia.
+    const ExpressionScaling es = expressionScaling (params.expression);
+    const double gen = es.generation;
+    const bool noGestures = es.amount < 0.03;
+    PerformerTraits t = traitsFor (profile);
+    t.vibratoDepth *= es.vibratoDepth; t.slideIn *= gen; t.legato *= gen; t.curl *= gen; t.palmMute *= gen;
+    t.dynamicRange *= 1.0 + 0.6 * (es.amount - 0.65); // exactamente 1.0 en 65 %
     const int64_t beat = seq.timeSignature.ticksPerBeat();
     const int64_t bar = seq.timeSignature.ticksPerBar();
     const double bpm = params.bpm > 1.0 ? params.bpm : 120.0;
@@ -130,9 +137,9 @@ void performSequence (Sequence& seq, const ComposerParams& params, PerformerProf
         Rng r (mix (seed ^ 0x5A17ull, mix ((uint64_t) n.startTick, (uint64_t) n.pitch)));
         NoteExpression& e = n.expr;
 
-        // --- Limitaciones físicas del instrumento ---
-        if (! canBend && e.bendType != BendType::None) flattenBend (n);
-        if (! canSlide) e.slideFrom = 0;
+        // --- Limitaciones físicas del instrumento (y Expresión 0 %: la nota suena ya en su altura final) ---
+        if ((! canBend || noGestures) && e.bendType != BendType::None) flattenBend (n);
+        if (! canSlide || noGestures) e.slideFrom = 0;
         if (! canPalmMute) e.palmMute = false;
 
         const double durSec = (double) n.lengthTicks * secPerTick;
