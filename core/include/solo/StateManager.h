@@ -4,6 +4,7 @@
 // Un estado inválido nunca se aplica a medias. Lee estados v1 (S0–S2) y los migra.
 #include "solo/BeatAnalyzer.h"
 #include "solo/MelodyExplorer.h"
+#include "solo/RhythmProposal.h"
 #include "solo/Effects.h"
 #include "solo/SoloComposer.h"
 #include "solo/SoloEngine.h"
@@ -70,6 +71,7 @@ struct SoloState
     std::string dnaSummary;              // descripción legible del ADN extraído
     BeatProject beat;                    // V4: beat importado (análisis + armonía editable); vacío si no hay
     MelodyProjectState melody;           // V4: familia de propuestas del Melody Explorer
+    RhythmPattern rhythm;                // V4-E: último patrón rítmico propuesto/editado (vacío si no hay)
     int loadedFromVersion = kVersion;    // informativo (no se serializa)
 };
 

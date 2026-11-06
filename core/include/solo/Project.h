@@ -5,6 +5,7 @@
 #include "solo/CreativeDNA.h"
 #include "solo/StateManager.h"
 #include "solo/VoiceAnalysis.h"
+#include "solo/VocalProposalAdapter.h"
 #include <string>
 #include <vector>
 
@@ -95,6 +96,13 @@ public:
     OpResult regenerateMelodyRegion (int fromBar, int toBar, uint64_t seed); // regenera compases de la variación actual con sus parámetros de familia
     OpResult setMelodyFreedom (double freedom);                          // 0..100 (no toca notas)
     bool melodyProposalFor (const VariationHistory::Item& item, MelodyProposal& out) const; // parámetros de familia de una variación
+    // ---- V4-E: tarareo (todas las tomas se analizan fuera del hilo de audio; aquí solo llega el análisis)
+    OpResult proposeRhythm (const VoiceAnalysis& take, const RhythmExtractOptions& o);  // -> state.rhythm (editable), sin notas todavía
+    OpResult setRhythmPatternText (const std::string& text);                           // edición del patrón en texto
+    OpResult applyRhythmPattern (uint64_t seed);                                       // patrón -> variación con notas de la armonía
+    OpResult proposeFromVoice (const VoiceAnalysis& take, const VocalProposalOptions& o); // original/corregida/desarrollada/combinada -> variaciones
+    OpResult correctRegionWithVoice (const VoiceAnalysis& take, int fromBar, int toBar, double quantize = 0.85); // nueva variación; A = anterior, B = nueva
+    bool familyParams (ComposerParams& out, std::string& error) const;                 // parámetros de la familia actual o del proyecto
     // ---- deshacer
     OpResult undoLast();
     OpResult redoLast();

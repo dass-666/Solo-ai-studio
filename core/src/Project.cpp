@@ -1,5 +1,6 @@
 #include "solo/Project.h"
 #include "solo/ChorusComposer.h"
+#include "solo/RhythmProposal.h"
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -783,6 +784,120 @@ OpResult ProjectController::setMelodyFreedom (double freedom)
     state.melody.brief.freedom = std::clamp (freedom, 0.0, 100.0);
     OpResult r; r.ok = true; r.settingsChanged = true;
     r.message = "Libertad creativa " + std::to_string ((int) std::lround (state.melody.brief.freedom)) + " %: " + freedomBandName (MelodyExplorer::freedomBand (state.melody.brief.freedom));
+    return r;
+}
+
+// ---------------------------------------------------------------- V4-E tarareo
+bool ProjectController::familyParams (ComposerParams& out, std::string& error) const
+{
+    if (state.melody.active && hasSequence())
+    {
+        MelodyProposal mp;
+        if (melodyProposalFor (state.history.currentItem(), mp)) { out = mp.params; return true; }
+    }
+    MelodyContext ctx;
+    if (state.melody.active && melodyContext (ctx, error)) { out = MelodyExplorer::baseParams (ctx, state.melody.brief); return true; }
+    return params (out, error);
+}
+
+OpResult ProjectController::proposeRhythm (const VoiceAnalysis& take, const RhythmExtractOptions& o)
+{
+    ComposerParams p; std::string err;
+    if (! familyParams (p, err)) return OpResult::fail (err);
+    RhythmPattern pat = extractRhythm (take, p.bpm, p.timeSignature, o);
+    if (pat.empty()) return OpResult::fail (pat.warnings.empty() ? "No se detectaron ataques" : pat.warnings.front());
+    state.rhythm = pat;
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    char buf[160];
+    std::snprintf (buf, sizeof (buf), "Patrón rítmico: %zu ataques en %d compases (a tiempo con el beat: %d %%, desviación media %.0f ms)",
+                   pat.events.size(), pat.bars, (int) std::lround (100 * pat.gridFit), pat.meanDeviationMs);
+    r.message = buf;
+    for (const auto& w : pat.warnings) r.message += "\n· " + w;
+    return r;
+}
+
+OpResult ProjectController::setRhythmPatternText (const std::string& text)
+{
+    RhythmPattern pat = state.rhythm;
+    if (pat.timeSignature.numerator != 3 && pat.timeSignature.numerator != 4) pat.timeSignature.numerator = state.settings.tsNumerator == 3 ? 3 : 4;
+    std::string err;
+    if (! RhythmPattern::fromText (text, pat, err)) return OpResult::fail (err);
+    state.rhythm = pat;
+    OpResult r; r.ok = true; r.settingsChanged = true; r.message = "Patrón editado: " + std::to_string (pat.events.size()) + " ataques";
+    return r;
+}
+
+OpResult ProjectController::applyRhythmPattern (uint64_t seed)
+{
+    if (state.rhythm.empty()) return OpResult::fail ("No hay patrón rítmico: propón uno tarareando o escríbelo");
+    ComposerParams p; std::string err;
+    if (! familyParams (p, err)) return OpResult::fail (err);
+    const auto res = proposeFromRhythm (state.rhythm, p, seed);
+    if (res.sequence.notes.empty()) return OpResult::fail (res.warnings.empty() ? "El patrón no produjo notas" : res.warnings.front());
+    Sequence s = res.sequence;
+    if (state.melody.active && state.melody.brief.type == MelodyType::Chorus)
+    {
+        ChorusShapeOptions c; c.character = state.melody.brief.character; c.mirrorHalves = false;
+        s = shapeChorus (s, p, p.progression, c, {});
+    }
+    auto r = pushVariation (s, seed, "Ritmo tarareado", "Ritmo tarareado");
+    if (r.ok && state.melody.active) state.melody.variationStrategy.push_back ({ state.history.currentItem().id, (int) ProposalStrategy::Rhythmic });
+    for (const auto& w : res.warnings) r.message += " · " + w;
+    return r;
+}
+
+OpResult ProjectController::proposeFromVoice (const VoiceAnalysis& take, const VocalProposalOptions& o)
+{
+    MelodyContext ctx; std::string err;
+    if (! melodyContext (ctx, err)) return OpResult::fail (err);
+    const MelodyBrief brief = state.melody.active ? state.melody.brief : defaultBrief();
+    const VocalProposalSet set = proposeFromVocal (take, ctx, brief, o);
+    if (set.proposals.empty()) return OpResult::fail (set.warnings.empty() ? "La toma no produjo propuestas" : set.warnings.front());
+    remember ("Proponer melodía desde la voz");
+    if (! state.melody.active || ! state.melody.identity.valid())
+    {
+        state.melody.active = true;
+        state.melody.brief = brief;
+        state.melody.identity.motif = set.motif;
+        state.melody.identity.motifSeed = o.seed * 0x9E37ull + 101ull;
+        state.melody.identity.description = "Motivo cantado";
+    }
+    int added = 0;
+    for (const auto& v : set.proposals)
+    {
+        if (! state.history.push (v.sequence, o.seed, v.name)) continue;
+        state.melody.variationStrategy.push_back ({ state.history.currentItem().id, v.strategy >= 0 ? v.strategy : (int) ProposalStrategy::Simple });
+        ++added;
+    }
+    if (added == 0) return OpResult::fail ("Historial lleno");
+    state.history.setCurrentIndex (state.history.size() - added); // la original queda seleccionada
+    state.seedMotifs = { set.motif };
+    OpResult r; r.ok = true; r.sequenceChanged = true; r.settingsChanged = true;
+    r.message = std::to_string (added) + " propuestas desde la voz (" + std::to_string (set.notesFromVoice) + " notas cantadas" + (set.usedRhythmOnly ? ", solo ritmo" : "") + ")";
+    for (const auto& w : set.warnings) r.message += "\n· " + w;
+    return r;
+}
+
+OpResult ProjectController::correctRegionWithVoice (const VoiceAnalysis& take, int fromBar, int toBar, double quantize)
+{
+    if (! hasSequence()) return OpResult::fail ("Primero genera o importa una melodía");
+    ComposerParams p; std::string err;
+    if (! familyParams (p, err)) return OpResult::fail (err);
+    const auto& cur = state.history.current();
+    normaliseBarRange (fromBar, toBar, cur.bars);
+    p.bars = cur.bars; p.timeSignature = cur.timeSignature;
+    const MelodyBrief brief = state.melody.active ? state.melody.brief : defaultBrief();
+    const uint32_t previousId = state.history.currentItem().id;
+    const int previousStrategy = state.melody.strategyOf (previousId);
+    const Sequence out = solo::correctRegionWithVoice (cur, take, p, brief, fromBar, toBar, lockedBarsFor (cur.bars), quantize);
+    auto r = pushVariation (out, state.history.currentSeed(), "Corregir compases " + std::to_string (fromBar + 1) + "-" + std::to_string (toBar + 1) + " tarareando",
+                            "Corrección " + std::to_string (fromBar + 1) + "-" + std::to_string (toBar + 1));
+    if (! r.ok) return r;
+    // A = la anterior, B = la corregida: comparación inmediata.
+    state.slotA = previousId; state.slotB = state.history.currentItem().id;
+    if (state.melody.active) state.melody.variationStrategy.push_back ({ state.slotB, previousStrategy >= 0 ? previousStrategy : 0 });
+    r.message += " · A/B listo (A = anterior, B = corregida)";
+    if (! take.pitchReliable) r.message += " · altura de la voz poco fiable: se usó solo el ritmo";
     return r;
 }
 

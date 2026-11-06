@@ -43,7 +43,9 @@ add_library(solo_core STATIC
     core/src/Commands.cpp
     core/src/BeatAnalyzer.cpp
     core/src/MelodyExplorer.cpp
-    core/src/ChorusComposer.cpp)
+    core/src/ChorusComposer.cpp
+    core/src/RhythmProposal.cpp
+    core/src/VocalProposalAdapter.cpp)
 target_include_directories(solo_core PUBLIC core/include)
 if(MSVC)
     target_compile_options(solo_core PRIVATE /W4 /utf-8)
@@ -61,7 +63,7 @@ endif()
 
 if(SOLO_BUILD_TESTS)
     enable_testing()
-    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp tests/TestTransport.cpp tests/TestTone.cpp tests/TestBeat.cpp tests/TestMelody.cpp)
+    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp tests/TestTransport.cpp tests/TestTone.cpp tests/TestBeat.cpp tests/TestMelody.cpp tests/TestHumV4.cpp)
     target_link_libraries(solo_tests PRIVATE solo_core)
     if(MSVC)
         target_compile_options(solo_tests PRIVATE /utf-8)
