@@ -113,6 +113,10 @@ struct ComposerParams
     PerformerProfile performer = PerformerProfile::Auto;
     double expression = 65.0; // macro Expresión (0..100): cuánta tendencia tiene el intérprete a escribir gestos
 
+    // V4: registro y salto máximo forzados (p. ej. registro vocal para un coro); -1 = los del instrumento.
+    int rangeLow = -1, rangeHigh = -1;
+    int maxLeap = -1;
+
     // Material temático externo (Creative DNA / voz).
     std::vector<SeedMotif> seedMotifs;
     double fidelity = 0.5;   // 0..1 cuánto se respeta el motivo semilla

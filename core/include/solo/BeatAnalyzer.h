@@ -106,6 +106,8 @@ struct BeatAnalysisResult
     double bpmConfidence = 0;
     std::vector<BpmCandidate> bpmCandidates; // mejor primero, incluye octavas (x2, /2)
     std::vector<double> beatsSec;            // posiciones aproximadas de los pulsos
+    std::vector<double> beatStrength;        // fuerza de ataque 0..1 en cada pulso (acentos del beat)
+    std::vector<double> offbeatStrength;     // fuerza de ataque 0..1 en el contratiempo (mitad del pulso)
     double firstBeatSec = 0;
     int beatsPerBar = 4;
     int bars = 0;

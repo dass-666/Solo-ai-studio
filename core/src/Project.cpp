@@ -1,4 +1,5 @@
 #include "solo/Project.h"
+#include "solo/ChorusComposer.h"
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -644,6 +645,144 @@ OpResult ProjectController::applyBeatToSettings()
     OpResult r; r.ok = true; r.settingsChanged = true;
     char buf[96]; std::snprintf (buf, sizeof (buf), "Compositor ajustado al beat: %s, %.1f BPM, %d compases", h.key.toString().c_str(), h.bpm, (int) p.bars.size());
     r.message = buf;
+    return r;
+}
+
+// ---------------------------------------------------------------- Melody Explorer (V4-B/C/D)
+bool ProjectController::melodyContext (MelodyContext& out, std::string& error) const
+{
+    MelodyContext c;
+    if (hasBeat() && ! state.beat.harmony.segments.empty())
+    {
+        c.harmony = state.beat.harmony;
+        c.fromBar = state.beat.sectionFromBar;
+        c.toBar = state.beat.sectionToBar;
+        c.beat = &state.beat.analysis;
+        c.bpm = state.beat.harmony.bpm;
+    }
+    else
+    {
+        ComposerParams p;
+        if (! params (p, error)) return false;
+        Progression full;
+        for (int b = 0; b < p.bars; ++b) full.bars.push_back (p.progression.chordAtBar (b));
+        c = MelodyContext::manual (p.key, full, p.bpm);
+        c.harmony.beatsPerBar = p.timeSignature.numerator;
+    }
+    if (c.bars() <= 0) { error = "No hay compases sobre los que componer"; return false; }
+    out = c;
+    return true;
+}
+
+MelodyBrief ProjectController::defaultBrief() const
+{
+    MelodyBrief b = state.melody.brief;
+    b.instrument = state.settings.instrument;
+    b.baseStyle = state.settings.style;
+    b.expression = state.macros.expression;
+    return b;
+}
+
+OpResult ProjectController::generateProposals (const MelodyBrief& brief)
+{
+    MelodyContext ctx; std::string err;
+    if (! melodyContext (ctx, err)) return OpResult::fail (err);
+    if (state.history.size() + 4 > VariationHistory::kMaxTotal && state.history.favoriteCount() + 4 > VariationHistory::kMaxTotal)
+        return OpResult::fail ("Historial lleno de favoritas: quita alguna favorita para seguir generando");
+    const MelodyFamily fam = MelodyExplorer::propose (ctx, brief);
+    if (fam.proposals.size() != 4) return OpResult::fail ("No se pudo crear la identidad musical (¿armonía vacía?)");
+    remember ("Generar 4 propuestas");
+    MelodyProjectState ms;
+    ms.active = true; ms.brief = brief; ms.identity = fam.identity; ms.diversity = fam.diversity;
+    ms.variationStrategy = state.melody.variationStrategy; // familias anteriores siguen reconocibles
+    for (const auto& p : fam.proposals)
+    {
+        if (! state.history.push (p.sequence, p.params.seed, p.name)) continue;
+        ms.variationStrategy.push_back ({ state.history.currentItem().id, (int) p.strategy });
+    }
+    state.history.setCurrentIndex (state.history.size() - 4);
+    state.melody = ms;
+    state.settings.seed = brief.seed;
+    OpResult r; r.ok = true; r.sequenceChanged = true; r.settingsChanged = true;
+    r.message = "4 propuestas (" + fam.summary() + ")";
+    return r;
+}
+
+bool ProjectController::melodyProposalFor (const VariationHistory::Item& item, MelodyProposal& out) const
+{
+    if (! state.melody.active || ! state.melody.identity.valid()) return false;
+    int strategy = state.melody.strategyOf (item.id);
+    if (strategy < 0) strategy = 0;
+    MelodyContext ctx; std::string err;
+    if (! melodyContext (ctx, err)) return false;
+    // Parámetros exactos de la estrategia (determinista) + la secuencia tal como está ahora.
+    MelodyProposal p = MelodyExplorer::proposeOne (ctx, state.melody.brief, state.melody.identity, (ProposalStrategy) strategy);
+    p.sequence = item.sequence;
+    p.params.bars = item.sequence.bars;
+    if ((int) p.params.progression.bars.size() != item.sequence.bars)
+    {
+        Progression full;
+        for (int b = 0; b < item.sequence.bars; ++b) full.bars.push_back (p.params.progression.chordAtBar (b));
+        p.params.progression = full;
+    }
+    out = p;
+    return true;
+}
+
+OpResult ProjectController::varyCurrent (int count, uint64_t seed)
+{
+    if (! hasSequence()) return OpResult::fail ("No hay variación de la que partir");
+    if (! state.melody.active) return OpResult::fail ("Primero genera propuestas con el explorador");
+    MelodyContext ctx; std::string err;
+    if (! melodyContext (ctx, err)) return OpResult::fail (err);
+    MelodyProposal fav;
+    if (! melodyProposalFor (state.history.currentItem(), fav)) return OpResult::fail ("No se pudo recuperar la familia de esta variación");
+    count = std::clamp (count, 1, 8);
+    const auto vars = MelodyExplorer::vary (ctx, state.melody.brief, state.melody.identity, fav, count, seed, lockedBarsFor (fav.sequence.bars));
+    if (vars.empty()) return OpResult::fail ("No se generaron variaciones");
+    remember ("Variar esta idea");
+    const int strategy = std::max (0, state.melody.strategyOf (state.history.currentItem().id));
+    int added = 0; double simSum = 0;
+    for (const auto& v : vars)
+    {
+        if (! state.history.push (v.sequence, v.params.seed, v.name)) continue;
+        state.melody.variationStrategy.push_back ({ state.history.currentItem().id, strategy });
+        simSum += v.similarityToIdentity; ++added;
+    }
+    if (added == 0) return OpResult::fail ("Historial lleno");
+    OpResult r; r.ok = true; r.sequenceChanged = true;
+    char buf[160];
+    std::snprintf (buf, sizeof (buf), "%d variaciones (%s, parecido medio con la favorita %d %%)", added,
+                   freedomBandName (MelodyExplorer::freedomBand (state.melody.brief.freedom)), (int) std::lround (100.0 * simSum / added));
+    r.message = buf;
+    return r;
+}
+
+OpResult ProjectController::regenerateMelodyRegion (int fromBar, int toBar, uint64_t seed)
+{
+    if (! hasSequence()) return OpResult::fail ("No hay solo");
+    if (! state.melody.active) return regenerateBars (fromBar, toBar, seed);
+    MelodyContext ctx; std::string err;
+    if (! melodyContext (ctx, err)) return OpResult::fail (err);
+    MelodyProposal cur;
+    if (! melodyProposalFor (state.history.currentItem(), cur)) return regenerateBars (fromBar, toBar, seed);
+    normaliseBarRange (fromBar, toBar, cur.sequence.bars);
+    Sequence out = MelodyExplorer::regenerateRegion (ctx, cur, fromBar, toBar, seed, lockedBarsFor (cur.sequence.bars));
+    if (state.melody.brief.type == MelodyType::Chorus)
+    {
+        ChorusShapeOptions o; o.character = state.melody.brief.character; o.mirrorHalves = false;
+        std::vector<bool> keep = lockedBarsFor (cur.sequence.bars);
+        for (int b = 0; b < cur.sequence.bars; ++b) if (b < fromBar || b > toBar) keep[(size_t) b] = true; // fuera de la región no se toca
+        out = shapeChorus (out, cur.params, cur.params.progression, o, keep);
+    }
+    return replaceSequence (out, "Regenerar compases " + std::to_string (fromBar + 1) + "-" + std::to_string (toBar + 1) + " (familia)");
+}
+
+OpResult ProjectController::setMelodyFreedom (double freedom)
+{
+    state.melody.brief.freedom = std::clamp (freedom, 0.0, 100.0);
+    OpResult r; r.ok = true; r.settingsChanged = true;
+    r.message = "Libertad creativa " + std::to_string ((int) std::lround (state.melody.brief.freedom)) + " %: " + freedomBandName (MelodyExplorer::freedomBand (state.melody.brief.freedom));
     return r;
 }
 

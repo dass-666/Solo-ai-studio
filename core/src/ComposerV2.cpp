@@ -202,7 +202,7 @@ class ComposerV2
 {
 public:
     explicit ComposerV2 (const ComposerParams& p)
-        : params (p), style (styleProfile (p.style)), inst (profileFor (p.instrument)),
+        : params (p), style (styleProfile (p.style)), inst (instrumentFor (p)),
           rng (p.seed * 0x9E37ull + 17), motifRng (p.motifSeed != 0 ? p.motifSeed : p.seed * 31 + 7),
           beat (p.timeSignature.ticksPerBeat()), bar (p.timeSignature.ticksPerBar()), total ((int64_t) p.bars * bar)
     {
@@ -257,7 +257,19 @@ public:
 private:
     const ComposerParams& params;
     const StyleProfile& style;
-    const InstrumentProfile& inst;
+    const InstrumentProfile inst; // copia: el registro puede venir forzado (rangeLow/rangeHigh/maxLeap)
+    static InstrumentProfile instrumentFor (const ComposerParams& p)
+    {
+        InstrumentProfile ip = profileFor (p.instrument);
+        if (p.rangeLow >= 0 && p.rangeHigh > p.rangeLow + 6)
+        {
+            ip.range.lowest = p.rangeLow; ip.range.highest = p.rangeHigh;
+            const int span = p.rangeHigh - p.rangeLow;
+            ip.range.comfortLow = p.rangeLow + span / 8; ip.range.comfortHigh = p.rangeHigh - span / 8;
+        }
+        if (p.maxLeap >= 2) ip.maxLeapSemitones = p.maxLeap;
+        return ip;
+    }
     Rng rng, motifRng;
     const int64_t beat, bar, total;
     double npbCap = 4.0;

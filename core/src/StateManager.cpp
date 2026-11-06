@@ -292,6 +292,7 @@ std::string serializeState (const SoloState& s)
     o << "ab=" << s.slotA << " " << s.slotB << "\n";
     o << "dna=" << oneLine (s.dnaSummary) << "\n";
     if (s.beat.loaded()) o << serializeBeatProject (s.beat);
+    if (s.melody.active) o << serializeMelodyState (s.melody);
     for (const auto& lane : s.automation.lanes)
     {
         o << "auto " << (int) lane.target << " " << (lane.enabled ? 1 : 0) << " " << fmt (lane.smoothingMs) << " "
@@ -352,6 +353,7 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
     uint32_t nextId = 0;
     bool sawEnd = false;
     std::string beatText; // líneas beat.* / harm.* (V4), se interpretan al final
+    std::string melText;  // líneas mel.* (V4 Melody Explorer)
     for (size_t li = 1; li < ls.size(); ++li)
     {
         const auto& l = ls[li];
@@ -479,6 +481,7 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
             beatText += l; beatText += '\n';
             continue;
         }
+        if (key.rfind ("mel.", 0) == 0) { melText += l; melText += '\n'; continue; }
         if (! applySetting (s.settings, key, val, error, version)) return false;
     }
     if (! beatText.empty())
@@ -486,6 +489,12 @@ bool deserializeState (const std::string& text, SoloState& out, std::string& err
         std::string berr;
         BeatProject bp;
         if (deserializeBeatProject (beatText, bp, berr)) s.beat = bp; // un beat ilegible no invalida el proyecto
+    }
+    if (! melText.empty())
+    {
+        std::string merr;
+        MelodyProjectState ms;
+        if (deserializeMelodyState (melText, ms, merr)) s.melody = ms;
     }
     if (! sawEnd) { error = "Estado truncado (falta 'end')"; return false; }
     if ((int) items.size() != wantedVariations) { error = "Número de variaciones inconsistente"; return false; }

@@ -586,6 +586,21 @@ BeatAnalysisResult analyseBeat (const MonoAudio& audio, const BeatAnalysisOption
         r.firstBeatSec = r.beatsSec.empty() ? 0 : r.beatsSec.front();
     }
     r.bars = (int) (r.beatsSec.size() / (size_t) r.beatsPerBar);
+    // Acentos: fuerza del ataque en cada pulso y en su contratiempo (para condicionar el ritmo de la melodía).
+    {
+        auto strengthAt = [&] (double sec) {
+            const int k = (int) std::lround (sec * framesPerSec);
+            double best = 0;
+            for (int d = -2; d <= 2; ++d) if (k + d >= 0 && k + d < f.count) best = std::max (best, (double) env[k + d]);
+            return best;
+        };
+        for (size_t i = 0; i < r.beatsSec.size(); ++i)
+        {
+            r.beatStrength.push_back (strengthAt (r.beatsSec[i]));
+            const double next = i + 1 < r.beatsSec.size() ? r.beatsSec[i + 1] : r.beatsSec[i] + 60.0 / std::max (20.0, r.bpm);
+            r.offbeatStrength.push_back (strengthAt ((r.beatsSec[i] + next) / 2));
+        }
+    }
     auto barFrameRange = [&] (int bar, int& t0, int& t1) {
         const size_t i0 = (size_t) bar * r.beatsPerBar, i1 = i0 + r.beatsPerBar;
         t0 = std::max (0, (int) std::lround (r.beatsSec[i0] * framesPerSec));
@@ -770,11 +785,14 @@ BeatAnalysisResult analyseBeat (const MonoAudio& audio, const BeatAnalysisOption
             db[b] = dbOf (std::sqrt (n > 0 ? s / n : 0));
         }
         r.barRmsDb = db;
-        std::vector<double> sorted = db; std::sort (sorted.begin(), sorted.end());
-        const double med = sorted[sorted.size() / 2];
+        // Niveles relativos al rango dinámico del propio beat: si todo está dentro de 3 dB, todo es "media".
+        double mn = 1e9, mx = -1e9;
+        for (double v : db) { mn = std::min (mn, v); mx = std::max (mx, v); }
+        const double range = mx - mn;
         for (int b = 0; b < r.bars; ++b)
         {
-            const EnergyLevel l = db[b] < med - 3.0 ? EnergyLevel::Low : db[b] > med + 2.0 ? EnergyLevel::High : EnergyLevel::Mid;
+            EnergyLevel l = EnergyLevel::Mid;
+            if (range >= 3.0) l = db[b] <= mn + range / 3.0 ? EnergyLevel::Low : db[b] >= mx - range / 3.0 ? EnergyLevel::High : EnergyLevel::Mid;
             if (! r.energyRegions.empty() && r.energyRegions.back().level == l)
             {
                 auto& reg = r.energyRegions.back();
@@ -881,6 +899,12 @@ std::string serializeBeatAnalysis (const BeatAnalysisResult& r)
     o << "beat.beats=";
     for (size_t i = 0; i < r.beatsSec.size(); ++i) { if (i) o << " "; o << fmt (r.beatsSec[i]); }
     o << "\n";
+    o << "beat.accents=";
+    for (size_t i = 0; i < r.beatStrength.size(); ++i) { if (i) o << " "; o << fmt (r.beatStrength[i]); }
+    o << "\n";
+    o << "beat.offbeats=";
+    for (size_t i = 0; i < r.offbeatStrength.size(); ++i) { if (i) o << " "; o << fmt (r.offbeatStrength[i]); }
+    o << "\n";
     o << "beat.barrms=";
     for (size_t i = 0; i < r.barRmsDb.size(); ++i) { if (i) o << " "; o << fmt (r.barRmsDb[i]); }
     o << "\n";
@@ -913,6 +937,8 @@ bool deserializeBeatAnalysis (const std::string& text, BeatAnalysisResult& out, 
         else if (k == "tonal" && v.size() >= 5) { r.tonal = v[0] == "1"; r.key = Key { mod12 (std::atoi (v[1].c_str())), std::atoi (v[2].c_str()) == 0 ? Mode::Major : Mode::Minor }; r.keyConfidence = std::atof (v[3].c_str()); r.chordConfidence = std::atof (v[4].c_str()); }
         else if (k == "keycand" && v.size() >= 3) { if (r.keyCandidates.size() < 8) { KeyCandidate c; c.key = Key { mod12 (std::atoi (v[0].c_str())), std::atoi (v[1].c_str()) == 0 ? Mode::Major : Mode::Minor }; c.score = std::atof (v[2].c_str()); r.keyCandidates.push_back (c); } }
         else if (k == "beats") { for (const auto& s : v) if (r.beatsSec.size() < 65536) r.beatsSec.push_back (std::atof (s.c_str())); }
+        else if (k == "accents") { for (const auto& t : v) if (r.beatStrength.size() < 65536) r.beatStrength.push_back (std::atof (t.c_str())); }
+        else if (k == "offbeats") { for (const auto& t : v) if (r.offbeatStrength.size() < 65536) r.offbeatStrength.push_back (std::atof (t.c_str())); }
         else if (k == "barrms") { for (const auto& s : v) if (r.barRmsDb.size() < 4096) r.barRmsDb.push_back (std::atof (s.c_str())); }
         else if (k == "energy" && v.size() >= 6) { EnergyRegion e; e.startBar = std::atoi (v[0].c_str()); e.endBar = std::atoi (v[1].c_str()); e.level = (EnergyLevel) std::clamp (std::atoi (v[2].c_str()), 0, 2); e.rmsDb = std::atof (v[3].c_str()); e.startSec = std::atof (v[4].c_str()); e.endSec = std::atof (v[5].c_str()); if (r.energyRegions.size() < 4096) r.energyRegions.push_back (e); }
         else if (k == "warn") { if (r.warnings.size() < 32) r.warnings.push_back (raw); }

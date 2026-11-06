@@ -87,6 +87,14 @@ public:
     OpResult setBeatSection (int fromBar, int toBar);      // sección sobre la que se compone (-1 = hasta el final)
     OpResult applyBeatToSettings();                        // copia BPM/tonalidad/acordes de la sección a los ajustes del compositor
     bool hasBeat() const { return state.beat.loaded(); }
+    // ---- Melody Explorer (V4-B/C/D). Contexto = beat importado (sección) o acordes manuales de los ajustes.
+    bool melodyContext (MelodyContext& out, std::string& error) const;   // out.beat apunta a state.beat.analysis (válido mientras no cambie el estado)
+    MelodyBrief defaultBrief() const;                                    // instrumento/estilo/expresión del proyecto + brief guardado
+    OpResult generateProposals (const MelodyBrief& brief);               // 4 propuestas -> 4 variaciones (una entrada de deshacer)
+    OpResult varyCurrent (int count, uint64_t seed);                     // variaciones relacionadas de la variación actual (libertad del brief)
+    OpResult regenerateMelodyRegion (int fromBar, int toBar, uint64_t seed); // regenera compases de la variación actual con sus parámetros de familia
+    OpResult setMelodyFreedom (double freedom);                          // 0..100 (no toca notas)
+    bool melodyProposalFor (const VariationHistory::Item& item, MelodyProposal& out) const; // parámetros de familia de una variación
     // ---- deshacer
     OpResult undoLast();
     OpResult redoLast();
