@@ -12,6 +12,8 @@
 #include "solo/SoloComposer.h"
 #include "solo/StateManager.h"
 #include "solo/ToneStudio.h"
+#include "solo/BeatAnalyzer.h"
+#include "solo/Project.h"
 #include <cstdio>
 #include <map>
 
@@ -258,6 +260,29 @@ int main (int argc, char** argv)
                     lane.enabled = true;
                     lane.points = { { 0, 0.2f }, { 4 * 4 * solo::kPPQ, 0.8f }, { 8 * 4 * solo::kPPQ, 0.4f } };
                     st.dnaSummary = "ejemplo: 3 motivos, saltos medios, dirección ascendente";
+                    {   // V4: beat sintético analizado + 4 propuestas del explorador (para ver la franja y la pestaña Beat / Explorer)
+                        solo::ProjectController pc;
+                        pc.state = st;
+                        pc.bpm = 146.0;
+                        solo::SyntheticBeatSpec spec; spec.bpm = 128; spec.key = { 4, solo::Mode::Minor }; spec.progression = "Em C G D"; spec.bars = 8;
+                        const auto beat = solo::synthesiseBeat (spec);
+                        auto r = pc.importBeat (beat, "demo-beat-128-Em.wav");
+                        check (r.ok, "Beat sintetico importado en el proyecto de la captura: " + juce::String (r.message));
+                        if (r.ok) { pc.applyBeatToSettings(); r = pc.generateProposals (pc.defaultBrief()); check (r.ok, "4 propuestas generadas para la captura: " + juce::String (r.message)); }
+                        st = pc.state;
+                    }
+                    {   // Fichero de ajustes del Standalone con este mismo estado (para capturas manuales reproducibles):
+                        // copiar a ~/.config/Solo AI Studio.settings antes de abrir la app.
+                        st.settings.proMode = false;
+                        const auto text = solo::serializeState (st);
+                        juce::MemoryBlock raw (text.data(), text.size());
+                        juce::XmlElement props ("PROPERTIES");
+                        auto* v = props.createNewChildElement ("VALUE");
+                        v->setAttribute ("name", "filterState");
+                        v->setAttribute ("val", raw.toBase64Encoding());
+                        const auto f = snapshot.getSiblingFile (snapshot.getFileNameWithoutExtension() + "-standalone.settings");
+                        check (props.writeTo (f), "Ajustes del Standalone con el estado de demo: " + f.getFileName());
+                    }
                     auto capture = [&] (bool pro, int tab, const juce::String& suffix) {
                         st.settings.proMode = pro;
                         st.settings.proTab = tab;
@@ -277,7 +302,7 @@ int main (int argc, char** argv)
                         check (png.writeImageToStream (img, os), "Captura del editor guardada: " + f.getFileName());
                     };
                     capture (false, 0, "-facil");
-                    for (int t = 0; t < 8; ++t) capture (true, t, "-pro" + juce::String (t));
+                    for (int t = 0; t < 9; ++t) capture (true, t, "-pro" + juce::String (t));
                 }
                 ed.reset();
             }

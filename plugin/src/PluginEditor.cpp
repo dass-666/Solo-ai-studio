@@ -6,7 +6,7 @@ namespace
 {
 const juce::Colour kBg (0xff101216), kPanel (0xff181b21), kText (0xffd7dce5), kDim (0xff8a93a3),
     kAccent (0xff2ec4b6), kError (0xffff6b6b);
-constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 272;
+constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 272, kBeat = 150;
 
 juce::String U (const char* s) { return juce::String::fromUTF8 (s); }
 
@@ -335,6 +335,9 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     voicePanel = std::make_unique<VoicePanel> (panelCtx);
     historyPanel = std::make_unique<HistoryPanel> (panelCtx);
     commandPanel = std::make_unique<CommandPanel> (panelCtx);
+    beatPanel = std::make_unique<BeatProPanel> (panelCtx);
+    beatStrip = std::make_unique<BeatStrip> (panelCtx);
+    addAndMakeVisible (*beatStrip);
     const auto tabBg = juce::Colour (0xff181b21);
     tabs.setTabBarDepth (26);
     tabs.setOutline (0);
@@ -346,15 +349,16 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     tabs.addTab (U ("Voz / ADN"), tabBg, voicePanel.get(), false);
     tabs.addTab (U ("Historial A/B"), tabBg, historyPanel.get(), false);
     tabs.addTab (U ("Comandos"), tabBg, commandPanel.get(), false);
+    tabs.addTab (U ("Beat / Explorer"), tabBg, beatPanel.get(), false);
     addChildComponent (tabs);
     tabs.getTabbedButtonBar().addChangeListener (this);
 
     proc.addChangeListener (this);
-    constrainer.setMinimumSize (1100, 720);
+    constrainer.setMinimumSize (1100, 760);
     constrainer.setMaximumSize (2000, 1400);
     setConstrainer (&constrainer);
     setResizable (true, true);
-    setSize (1180, 800);
+    setSize (1180, 860);
 
     refreshFromProcessor();
     pianoRoll.onSelectionChanged();
@@ -445,7 +449,7 @@ void SoloAIStudioEditor::refreshSequence()
 void SoloAIStudioEditor::refreshPanels()
 {
     for (ProPanel* p : std::initializer_list<ProPanel*> { notesPanel.get(), fxPanel.get(), tonePanel.get(), autoPanel.get(), voicePanel.get(),
-                                                          historyPanel.get(), commandPanel.get() })
+                                                          historyPanel.get(), commandPanel.get(), beatPanel.get(), beatStrip.get() })
         if (p != nullptr) p->refresh();
 }
 
@@ -667,10 +671,12 @@ void SoloAIStudioEditor::paint (juce::Graphics& g)
     g.setColour (kPanel);
     g.fillRect (0, 0, getWidth(), kHeader);
     g.fillRect (0, kHeader, kLeft, getHeight() - kHeader - kStatus);
-    if (proButton.getToggleState()) g.fillRect (kLeft, kHeader, getWidth() - kLeft, kPro);
+    g.fillRect (kLeft, kHeader, getWidth() - kLeft, kBeat);
+    if (proButton.getToggleState()) g.fillRect (kLeft, kHeader + kBeat, getWidth() - kLeft, kPro);
     g.setColour (juce::Colour (0xff262a33));
     g.drawHorizontalLine (kHeader, 0.0f, (float) getWidth());
     g.drawVerticalLine (kLeft, (float) kHeader, (float) (getHeight() - kStatus));
+    g.drawHorizontalLine (kHeader + kBeat, (float) kLeft, (float) getWidth());
     g.drawHorizontalLine (getHeight() - kStatus, 0.0f, (float) getWidth());
 }
 
@@ -739,6 +745,9 @@ void SoloAIStudioEditor::resized()
     }
     left.removeFromTop (8);
     dragArea.setBounds (left.removeFromTop (34));
+
+    // ---- franja beat / explorador (V4)
+    beatStrip->setBounds (r.removeFromTop (kBeat).reduced (6, 4));
 
     // ---- panel Pro (pestañas)
     if (proButton.getToggleState()) tabs.setBounds (r.removeFromTop (kPro).reduced (6, 4));

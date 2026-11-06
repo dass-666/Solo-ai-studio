@@ -67,6 +67,8 @@ El proyecto se guarda dentro del `.flp`: solo, variaciones, favoritas, bloqueos,
 - La flauta tiene un ataque de soplo suave: medido, suena unos 30 ms más tarde que la guitarra.
 - Guitar Tone Studio v3 (Tono, Guitarra y las perillas Fuerza / Expresión / Ambiente; Pro › Ampli / Samples): ver `GUITAR-TONE.md`. Con el ampli v3 el plugin declara 31 muestras de latencia (46 con oversampling 4x); FL la compensa automáticamente.
 
+- Beat-to-Melody V4 (IMPORTAR BEAT, GENERAR (4 PROPUESTAS), VARIAR ESTA IDEA; Pro › Beat / Explorer): ver `BEAT-MELODY.md`. El análisis del beat está probado solo con beats sintéticos; comprueba BPM y tonalidad y confírmalos si hace falta.
+
 ## 6. Si algo falla
 
 Anota la prueba (`PRUEBAS-FL.md`), la versión de FL, el tamaño de buffer de audio y, si puedes, guarda el `.flp`.

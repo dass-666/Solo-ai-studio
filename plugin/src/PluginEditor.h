@@ -2,6 +2,7 @@
 #include "PianoRoll.h"
 #include "PluginProcessor.h"
 #include "ProPanels.h"
+#include "BeatPanel.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class SoloLookAndFeel : public juce::LookAndFeel_V4
@@ -118,6 +119,8 @@ private:
     std::unique_ptr<VoicePanel> voicePanel;
     std::unique_ptr<HistoryPanel> historyPanel;
     std::unique_ptr<CommandPanel> commandPanel;
+    std::unique_ptr<BeatStrip> beatStrip;      // V4: franja beat / explorador (Fácil y Pro)
+    std::unique_ptr<BeatProPanel> beatPanel;   // V4: pestaña Pro
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
     std::unique_ptr<juce::FileChooser> chooser;
     juce::ComponentBoundsConstrainer constrainer;

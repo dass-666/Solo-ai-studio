@@ -77,6 +77,29 @@ public:
 
     // Voz: lee un WAV, lo analiza y lo convierte en solo (modo indicado). Devuelve el resumen del análisis.
     bool importVoice (const juce::File& wav, const solo::HumToSoloOptions& o, juce::String& message);
+    // V4: beat y Melody Explorer (todo en el hilo de mensajes; el análisis nunca toca processBlock).
+    bool importBeat (const juce::File& wav, juce::String& message);
+    bool proposeRhythmFromFile (const juce::File& wav, juce::String& message);
+    bool proposeMelodyFromFile (const juce::File& wav, juce::String& message);
+    bool correctRegionFromFile (const juce::File& wav, int fromBar, int toBar, juce::String& message);
+    struct BeatView
+    {
+        bool loaded = false, percussive = false;
+        juce::String path, summary, key;
+        double bpm = 0, bpmConfidence = 0, keyConfidence = 0, chordConfidence = 0;
+        bool bpmConfirmed = false, keyConfirmed = false;
+        int bars = 0, sectionFrom = 0, sectionTo = -1;
+        std::vector<juce::String> chordPerBar; // vacío si no hay acordes
+        std::vector<int> energyPerBar;         // 0 baja, 1 media, 2 alta
+        std::vector<double> chordConfPerBar;
+        std::vector<juce::String> warnings;
+        // explorador
+        bool melodyActive = false;
+        juce::String identity;
+        double diversity = 0;
+        int currentStrategy = -1;
+    };
+    BeatView getBeatView() const;
     // Dirección por texto: interpretar, previsualizar sobre una copia y ejecutar.
     solo::ParsedCommand parseCommandText (const juce::String& text) const;
     solo::CommandPreview previewParsed (const solo::ParsedCommand& c) const;

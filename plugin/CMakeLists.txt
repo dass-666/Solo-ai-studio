@@ -25,7 +25,8 @@ target_sources(SoloAIStudio PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
     src/PianoRoll.cpp
-    src/ProPanels.cpp)
+    src/ProPanels.cpp
+    src/BeatPanel.cpp)
 
 target_compile_definitions(SoloAIStudio PUBLIC
     JUCE_WEB_BROWSER=0

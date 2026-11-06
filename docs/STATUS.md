@@ -94,3 +94,17 @@ Rama `claude/solo-ai-studio-v3-guitar-tone` (sale de `6cf4ab6`). Detalle en `doc
 
 Resultados de la prueba manual de Diego en FL Studio (versión FL-prep): carga ✔, sincronización ✘, edición en
 vivo ✔, MIDI/WAV ✔, guardar FLP ✔. La sincronización sigue **sin validar** tras la corrección.
+
+## Beat-to-Melody + Melody Explorer V4 (2026-11-06)
+
+Rama `claude/solo-ai-studio-v4-beat-melody` (sale de `e171da5`). Detalle en `docs/BEAT-MELODY.md`.
+
+| Pieza | Estado | Evidencia |
+|---|---|---|
+| Análisis del beat (BPM, tonalidad, acordes, energía, confianzas, procedencia) | Validado **solo con beats sintéticos** | 22 pruebas (`TestBeat.cpp`), `solo_cli beat` |
+| Melody Explorer: 4 estrategias, familias, libertad 0–100, métricas de parecido/diversidad | Validado (objetivo) | 12 pruebas (`TestMelody.cpp`), diversidad 0,73–0,79 en la demo |
+| Coro cantable (registro, saltos, respiraciones, repetición) | Validado (objetivo), **sin escucha humana** | `chorus_is_singable` |
+| Proponer ritmo / melodía desde voz, corregir región | Validado con tarareo sintético; **no con voces reales** | 4 pruebas (`TestHumV4.cpp`) |
+| Interfaz (franja Beat, pestaña Beat / Explorer) | Parcial | host de prueba con 9 pestañas, capturas en Xvfb; **sin FL Studio** |
+| Persistencia y compatibilidad con estados anteriores | Validado | pruebas de estado en los tres ficheros |
+| Transporte, Guitar Tone Studio v3, voz (Hum-to-Solo) | Sin cambios | la batería anterior sigue pasando |

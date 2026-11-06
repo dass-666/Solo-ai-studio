@@ -379,6 +379,132 @@ int cmdSynthBeat (int argc, char** argv)
     return 0;
 }
 
+long peakRssKb();
+
+// ---- V4: demo completa beat -> análisis -> 4 propuestas (+ variaciones) -> MIDI/WAV y mezcla con el beat
+int cmdBeatDemo (int argc, char** argv)
+{
+    const std::string dir = argv[2];
+    std::map<std::string, std::string> kv;
+    for (int i = 3; i + 1 < argc; i += 2) kv[argv[i]] = argv[i + 1];
+    auto get = [&] (const char* k, const std::string& d) { auto it = kv.find (std::string ("--") + k); return it == kv.end() ? d : it->second; };
+    std::filesystem::create_directories (dir);
+    std::ofstream md (dir + "/resumen.md");
+    md << "# Demo V4: beat sintético -> análisis -> Melody Explorer\n\n"
+          "Beat SINTÉTICO (batería + pad + bajo, tonalidad y BPM conocidos). El análisis de mezclas comerciales no queda validado por esta demo.\n"
+          "Las métricas son objetivas (parecido, diversidad, coherencia armónica): no miden calidad artística; no ha habido evaluación auditiva humana.\n\n";
+    // 1) beat sintético
+    SyntheticBeatSpec spec;
+    spec.bpm = std::atof (get ("bpm", "128").c_str());
+    Key::parse (get ("key", "Em"), spec.key);
+    spec.progression = get ("prog", "Em C G D");
+    spec.bars = std::atoi (get ("bars", "8").c_str());
+    spec.sampleRate = std::atof (get ("sr", "48000").c_str());
+    spec.swingSec = std::atof (get ("swing", "0.02").c_str());
+    spec.noiseDb = std::atof (get ("noise", "-40").c_str());
+    const auto beat = synthesiseBeat (spec);
+    const std::string beatPath = dir + "/00-beat-sintetico.wav";
+    writeWavFile (beatPath, beat, 2);
+    // 2) análisis a través del proyecto (igual que el plugin)
+    ProjectController pc;
+    const auto t0 = std::chrono::steady_clock::now();
+    const long rss0 = peakRssKb();
+    auto r = pc.importBeat (beat, beatPath);
+    const double analysisMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+    std::printf ("Análisis: %s (%.0f ms)\n", r.message.c_str(), analysisMs);
+    if (! r.ok) return 1;
+    pc.bpm = pc.state.beat.harmony.bpm;
+    pc.applyBeatToSettings();
+    const auto& a = pc.state.beat.analysis;
+    char line[1024];
+    std::snprintf (line, sizeof line, "## Beat\n\n- Generado: %.1f BPM, %s, acordes %s, %d compases, %.0f Hz, swing %.0f ms, ruido %.0f dB\n"
+                   "- Analizado: %.1f BPM (confianza %.2f), %s (confianza %.2f), tonal %s, %d compases, acordes %s\n- Tiempo de análisis: %.0f ms para %.1f s de audio\n\n",
+                   spec.bpm, spec.key.toString().c_str(), spec.progression.c_str(), spec.bars, spec.sampleRate, spec.swingSec * 1000, spec.noiseDb,
+                   a.bpm, a.bpmConfidence, a.key.toString().c_str(), a.keyConfidence, a.tonal ? "sí" : "no", a.bars, pc.state.beat.harmony.toProgression().toString().c_str(), analysisMs, a.durationSec);
+    md << line;
+    std::ofstream (dir + "/00-analisis.txt") << a.summary();
+    // 3) propuestas por tipo
+    struct TypeDemo { MelodyType type; const char* name; ChorusCharacter ch; };
+    const TypeDemo types[] = { { MelodyType::Chorus, "coro", ChorusCharacter::EasyToSing }, { MelodyType::Solo, "solo", ChorusCharacter::EasyToSing },
+                               { MelodyType::Interlude, "interludio", ChorusCharacter::EasyToSing } };
+    int fileIndex = 1;
+    for (const auto& td : types)
+    {
+        MelodyBrief brief = pc.defaultBrief();
+        brief.type = td.type; brief.character = td.ch; brief.freedom = 35; brief.seed = 1;
+        const auto t1 = std::chrono::steady_clock::now();
+        r = pc.generateProposals (brief);
+        const double genMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t1).count();
+        std::printf ("%s: %s (%.0f ms)\n", td.name, r.message.c_str(), genMs);
+        if (! r.ok) continue;
+        ComposerParams fam; std::string err;
+        pc.familyParams (fam, err);
+        std::snprintf (line, sizeof line, "## Tipo: %s\n\n%s\n\nGeneración de las 4 propuestas: %.0f ms.\n\n| Archivo | Estrategia | Notas | Parecido a la identidad | Notas del acorde (t. fuerte) | En escala |\n|---|---|---|---|---|---|\n",
+                       td.name, r.message.c_str(), genMs);
+        md << line;
+        std::vector<Sequence> seqs;
+        const int n = pc.state.history.size();
+        for (int i = n - 4; i < n; ++i)
+        {
+            const auto& item = pc.state.history.all()[(size_t) i];
+            MelodyProposal mp;
+            const bool known = pc.melodyProposalFor (item, mp);
+            const auto fit = harmonicFit (item.sequence, fam.progression, fam.key);
+            char fname[128]; std::snprintf (fname, sizeof fname, "%02d-%s-%c", fileIndex++, td.name, known ? "ABCD"[(int) mp.strategy] : 'x');
+            const auto out = renderOut (item.sequence, fam, fxByName ("Emotional Lead"), dir + "/" + fname, -18.0, (int) spec.sampleRate);
+            std::snprintf (line, sizeof line, "| %s | %s | %zu | %.2f | %.0f%% | %.0f%% |\n", fname, known ? strategyName (mp.strategy) : "?",
+                           item.sequence.notes.size(), known ? mp.similarityToIdentity : 0.0, fit.strongChordTones * 100, fit.inScale * 100);
+            md << line;
+            seqs.push_back (item.sequence);
+            if (td.type == MelodyType::Chorus && i == n - 4)
+            {   // mezcla con el beat (-6 dB) de la propuesta A del coro
+                std::vector<float> L = out.r.left, R = out.r.right;
+                const double ratio = spec.sampleRate / beat.sampleRate;
+                const size_t len = std::max (L.size(), (size_t) ((double) beat.samples.size() * ratio));
+                L.resize (len, 0.0f); R.resize (len, 0.0f);
+                for (size_t k = 0; k < len; ++k)
+                {
+                    const double src = (double) k / ratio; const size_t i0 = (size_t) src;
+                    if (i0 + 1 >= beat.samples.size()) break;
+                    const float b = (float) (beat.samples[i0] + (src - (double) i0) * (beat.samples[i0 + 1] - beat.samples[i0])) * 0.5f;
+                    L[k] += b; R[k] += b;
+                }
+                float peak = 0; for (size_t k = 0; k < len; ++k) peak = std::max (peak, std::max (std::abs (L[k]), std::abs (R[k])));
+                if (peak > 0.89f) for (size_t k = 0; k < len; ++k) { L[k] *= 0.89f / peak; R[k] *= 0.89f / peak; }
+                writeWav24 (dir + "/" + fname + "-mezcla-con-beat.wav", L, R, (int) spec.sampleRate, err);
+            }
+        }
+        std::snprintf (line, sizeof line, "\nDiversidad de la familia (media de 1 - parecido entre pares): %.2f\n\n", familyDiversity (seqs));
+        md << line;
+        if (td.type == MelodyType::Chorus)
+        {   // variaciones de la propuesta A con libertad 20 / 50 / 85
+            md << "### Variaciones de la propuesta A del coro\n\n| Libertad | Archivo | Parecido con la favorita |\n|---|---|---|\n";
+            const int favIndex = n - 4;
+            for (int freedom : { 20, 50, 85 })
+            {
+                pc.state.history.setCurrentIndex (favIndex);
+                pc.setMelodyFreedom (freedom);
+                const Sequence fav = pc.state.history.current();
+                r = pc.varyCurrent (1, (uint64_t) freedom);
+                if (! r.ok) { md << "| " << freedom << " | (error: " << r.message << ") | |\n"; continue; }
+                const auto& v = pc.state.history.current();
+                char fname[128]; std::snprintf (fname, sizeof fname, "%02d-coro-variacion-libertad%d", fileIndex++, freedom);
+                renderOut (v, fam, fxByName ("Emotional Lead"), dir + "/" + fname, -18.0, (int) spec.sampleRate);
+                std::snprintf (line, sizeof line, "| %d %% | %s | %.2f |\n", freedom, fname, melodySimilarity (v, fav).overall);
+                md << line;
+            }
+            md << "\n";
+        }
+    }
+    const long rss1 = peakRssKb();
+    std::snprintf (line, sizeof line, "## Recursos\n\n- Memoria residente máxima del proceso: %.1f MB antes del análisis, %.1f MB al final (incluye renders de audio)\n- Estado del proyecto serializado: %zu bytes\n",
+                   rss0 / 1024.0, rss1 / 1024.0, serializeState (pc.state).size());
+    md << line;
+    std::ofstream (dir + "/proyecto.solo-state.txt") << serializeState (pc.state);
+    std::printf ("-> %s/resumen.md\n", dir.c_str());
+    return 0;
+}
+
 int cmdSynthVoice (const std::string& path)
 {
     const double e = 0.3;
@@ -677,6 +803,7 @@ int main (int argc, char** argv)
     if (argc >= 3 && std::strcmp (argv[1], "synthvoice") == 0) return cmdSynthVoice (argv[2]);
     if (argc >= 3 && std::strcmp (argv[1], "beat") == 0) return cmdBeat (argc, argv);
     if (argc >= 3 && std::strcmp (argv[1], "synthbeat") == 0) return cmdSynthBeat (argc, argv);
+    if (argc >= 3 && std::strcmp (argv[1], "beatdemo") == 0) return cmdBeatDemo (argc, argv);
     if (argc >= 2 && std::strcmp (argv[1], "bench") == 0) return cmdBench();
     if (argc >= 3 && std::strcmp (argv[1], "tone-ab") == 0) return cmdToneAb (argc, argv);
     if (argc >= 3 && std::strcmp (argv[1], "makebank") == 0) return cmdMakeBank (argv[2]);
@@ -696,6 +823,7 @@ int main (int argc, char** argv)
                  "  solo_cli synthvoice <salida.wav>\n"
                  "  solo_cli beat <beat.wav> [--ts 4] [--min 60] [--max 200] [--out analisis.txt]   análisis offline del beat (V4)\n"
                  "  solo_cli synthbeat <salida.wav> [--bpm 120] [--key Am] [--prog \"Am F C G\"] [--bars 8] [--drums 0|1] [--harmony 0|1] [--noise -70] [--swing 0.02] [--leadin 0] [--sr 44100] [--channels 1|2]\n"
+                 "  solo_cli beatdemo <carpeta> [--bpm 128] [--key Em] [--prog \"Em C G D\"] [--bars 8] [--sr 48000]   beat sintético -> análisis -> propuestas (MIDI/WAV + mezcla)\n"
                  "  solo_cli bench\n  solo_cli tone-ab <carpeta> [--expression 65]   demos v2/v3 con el mismo MIDI a -18 LUFS\n  solo_cli makebank <carpeta>                    banco SFZ sintético de prueba\n  solo_cli calibrate\n  solo_cli command \"<orden en español>\"\n");
     return 1;
 }

@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "solo/VoiceAnalysis.h"
+#include "solo/VocalProposalAdapter.h"
 
 #include <cmath>
 
@@ -235,6 +236,90 @@ void SoloAIStudioProcessor::ensureRigResources()
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- V4: beat y Melody Explorer
+bool SoloAIStudioProcessor::importBeat (const juce::File& wav, juce::String& message)
+{
+    MonoAudio in;
+    std::string err;
+    if (! readWavFile (wav.getFullPathName().toStdString(), in, err)) { message = utf8 ("No se pudo leer el WAV: ") + utf8 (err); return false; }
+    // Análisis offline en el hilo de mensajes (medido: ~0.7 s por 2 minutos de audio). Nunca en processBlock.
+    const auto r = perform ([&] (ProjectController& p) {
+        auto res = p.importBeat (in, wav.getFullPathName().toStdString());
+        if (res.ok && ! p.state.beat.harmony.segments.empty())
+        {
+            const auto a = p.applyBeatToSettings(); // tonalidad, acordes, compases y BPM del beat pasan al compositor
+            if (a.ok) res.message += "\n" + a.message;
+        }
+        return res;
+    });
+    message = utf8 (r.message);
+    setStatus (message);
+    return r.ok;
+}
+
+bool SoloAIStudioProcessor::proposeRhythmFromFile (const juce::File& wav, juce::String& message)
+{
+    MonoAudio in; std::string err;
+    if (! readWavFile (wav.getFullPathName().toStdString(), in, err)) { message = utf8 ("No se pudo leer el WAV: ") + utf8 (err); return false; }
+    const auto va = analyseVoice (in);
+    const auto r = perform ([&] (ProjectController& p) { return p.proposeRhythm (va, {}); });
+    message = utf8 (r.message);
+    return r.ok;
+}
+
+bool SoloAIStudioProcessor::proposeMelodyFromFile (const juce::File& wav, juce::String& message)
+{
+    MonoAudio in; std::string err;
+    if (! readWavFile (wav.getFullPathName().toStdString(), in, err)) { message = utf8 ("No se pudo leer el WAV: ") + utf8 (err); return false; }
+    const auto va = analyseVoice (in);
+    VocalProposalOptions o;
+    o.seed = freshSeed();
+    const auto r = perform ([&] (ProjectController& p) { return p.proposeFromVoice (va, o); });
+    message = utf8 (r.message);
+    return r.ok;
+}
+
+bool SoloAIStudioProcessor::correctRegionFromFile (const juce::File& wav, int fromBar, int toBar, juce::String& message)
+{
+    MonoAudio in; std::string err;
+    if (! readWavFile (wav.getFullPathName().toStdString(), in, err)) { message = utf8 ("No se pudo leer el WAV: ") + utf8 (err); return false; }
+    const auto va = analyseVoice (in);
+    const auto r = perform ([&] (ProjectController& p) { return p.correctRegionWithVoice (va, fromBar, toBar); });
+    message = utf8 (r.message);
+    return r.ok;
+}
+
+SoloAIStudioProcessor::BeatView SoloAIStudioProcessor::getBeatView() const
+{
+    BeatView v;
+    const juce::ScopedLock sl (stateLock);
+    const auto& b = project.state.beat;
+    v.melodyActive = project.state.melody.active;
+    if (v.melodyActive)
+    {
+        v.identity = utf8 (project.state.melody.identity.description);
+        v.diversity = project.state.melody.diversity;
+        if (project.hasSequence()) v.currentStrategy = project.state.melody.strategyOf (project.state.history.currentItem().id);
+    }
+    if (! b.loaded()) return v;
+    v.loaded = true;
+    v.percussive = b.analysis.percussiveOnly;
+    v.path = utf8 (b.path);
+    v.summary = utf8 (b.analysis.summary());
+    v.bpm = b.harmony.bpm; v.bpmConfidence = b.harmony.bpmConfidence; v.bpmConfirmed = b.harmony.bpmProvenance == Provenance::Confirmed;
+    v.key = utf8 (b.harmony.key.toString()); v.keyConfidence = b.harmony.keyConfidence; v.keyConfirmed = b.harmony.keyProvenance == Provenance::Confirmed;
+    v.chordConfidence = b.analysis.chordConfidence;
+    v.bars = std::max (b.harmony.bars, b.analysis.bars);
+    v.sectionFrom = b.sectionFromBar; v.sectionTo = b.sectionToBar;
+    if (! b.harmony.segments.empty())
+        for (int bar = 0; bar < b.harmony.bars; ++bar) { v.chordPerBar.push_back (utf8 (b.harmony.chordAtBar (bar).toString (b.harmony.key.prefersFlats()))); v.chordConfPerBar.push_back (b.harmony.chordConfidenceAtBar (bar)); }
+    v.energyPerBar.assign ((size_t) v.bars, 1);
+    for (const auto& e : b.analysis.energyRegions)
+        for (int bar = e.startBar; bar < e.endBar && bar < v.bars; ++bar) if (bar >= 0) v.energyPerBar[(size_t) bar] = (int) e.level;
+    for (const auto& w : b.analysis.warnings) v.warnings.push_back (utf8 (w));
+    return v;
 }
 
 SoloAIStudioProcessor::RigResources SoloAIStudioProcessor::getRigResources() const

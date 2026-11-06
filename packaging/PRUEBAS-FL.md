@@ -40,3 +40,19 @@ Versión de FL: ______ · Interfaz de audio y buffer: ______ · Fecha: ______
 | 21 | **Latencia**: con un ampli v3 (2x) el canal declara 31 muestras (46 con 4x); el MIDI exportado y el audio siguen alineados | FL compensa (PDC) sin desplazar las notas | |
 | 22 | **Exportar MIDI con pitch bend** y arrastrarlo a un sinte de FL | Los bends/vibratos del solo aparecen como pitch bend; sin curva a Expresión 0 % | |
 | 23 | **CPU** con High Gain Solo (4x) y con Rock Lead (2x) | Anota los valores | |
+
+## Beat-to-Melody + Melody Explorer V4
+
+| # | Prueba | Qué debe pasar | Resultado |
+|---|---|---|---|
+| 24 | **Importar beat**: «IMPORTAR BEAT (WAV)…» con un beat tuyo de 8–16 compases (WAV, cualquier frecuencia) | Aparecen BPM, tonalidad y acordes con su confianza; FL no se congela más de 1–2 s | |
+| 25 | **Comprobar el análisis**: compara el BPM con el del beat; si falla, Pro › Beat / Explorer › «Confirmar BPM» (mira «otros BPM») y «Confirmar tonalidad» | Tras confirmar, la franja marca el dato como confirmado y el compositor usa esos valores | |
+| 26 | **Acordes a mano** con un beat solo percusivo | «Acordes a mano» acepta la progresión y GENERAR compone sobre ella | |
+| 27 | **GENERAR (4 PROPUESTAS)** con tipo Coro, carácter Fácil de cantar | 4 variaciones nuevas, claramente distintas, en la tonalidad del beat; el piano roll muestra la actual | |
+| 28 | **Escuchar con el beat**: pista del beat en FL + plugin sonando con el DAW | La melodía cae en el compás (si no, anota el desfase) | |
+| 29 | **VARIAR ESTA IDEA** con libertad 15, 45 y 90 | A 15 casi igual; a 45 reconocible; a 90 muy distinta | |
+| 30 | **Regenerar compases (familia)** tras seleccionar 2 compases en la regla del piano roll, con otro compás bloqueado | Solo cambian los compases elegidos; el bloqueado no | |
+| 31 | **Proponer ritmo (WAV)** con un tarareo rítmico tuyo | Aparece el patrón en texto; «Aplicar patrón» genera notas sobre ese ritmo | |
+| 32 | **Proponer melodía (WAV)** con una melodía cantada | La primera propuesta es la tuya sin corregir; las siguientes en la armonía del beat | |
+| 33 | **Guardar y reabrir el FLP** con beat y propuestas | Se restauran beat (análisis), sección, familia y variaciones | |
+| 34 | **Exportar MIDI/WAV** de una propuesta y abrirlo en FL | Mismas notas que el piano roll | |

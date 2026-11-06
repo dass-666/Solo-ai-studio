@@ -49,6 +49,12 @@ jobs:
           mkdir tone-out
           build/Release/solo_cli.exe tone-ab tone-out
 
+      - name: Beat-to-Melody V4 (beat sintético -> análisis -> propuestas, MIDI/WAV + mezcla)
+        run: |
+          mkdir beat-out
+          build/Release/solo_cli.exe beatdemo beat-out
+          build/Release/solo_cli.exe beat beat-out/00-beat-sintetico.wav --out beat-out/00-analisis-cli.txt
+
       - name: Empaquetar (VST3 + standalone + instalador + guía + ejemplos)
         shell: pwsh
         run: |
@@ -61,6 +67,7 @@ jobs:
           Copy-Item docs/MIDI.md package/
           Copy-Item docs/LICENSES.md package/
           Copy-Item docs/GUITAR-TONE.md package/
+          Copy-Item docs/BEAT-MELODY.md package/
           $cli = "build/Release/solo_cli.exe"
           & $cli generate --key Am --prog "Am F C G" --bpm 146 --style rock --tone "Rock Lead" --seed 1 --out package/ejemplos/01-rock-Am-146
           & $cli generate --key A --prog "A7 D7 A7 E7" --bpm 96 --bars 8 --style blues --tone "Blues Lead" --seed 7 --out package/ejemplos/02-blues-A-96
@@ -108,6 +115,11 @@ jobs:
           path: tone-out/
 
       - uses: actions/upload-artifact@v4
+        with:
+          name: SoloAIStudio-beat-melody-v4-demo
+          path: beat-out/
+
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pluginval-logs
@@ -132,6 +144,8 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Host de prueba (con editor)
         run: xvfb-run -a build/plugin/SoloHostTest_artefacts/Release/SoloHostTest "build/plugin/SoloAIStudio_artefacts/Release/VST3/Solo AI Studio.vst3" --editor
+      - name: Beat-to-Melody V4 (demo CLI)
+        run: build/solo_cli beatdemo beat-out && build/solo_cli beat beat-out/00-beat-sintetico.wav
 
   sanitizers:
     name: Linux (núcleo con ASan + UBSan)
