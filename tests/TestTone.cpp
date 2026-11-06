@@ -7,6 +7,7 @@
 #include "solo/VoiceAnalysis.h"
 #include "TestFramework.h"
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 
 extern std::atomic<long> g_allocs;
@@ -24,6 +25,12 @@ using namespace solo;
 namespace
 {
 constexpr double kPi = 3.141592653589793;
+
+// Carpeta temporal portable (en el CI de Windows no existe /tmp ni "mkdir -p").
+std::string tempDir (const char* name)
+{
+    return (std::filesystem::temp_directory_path() / name).string();
+}
 
 double rmsOf (const std::vector<float>& v, size_t from = 0)
 {
@@ -440,9 +447,8 @@ TEST (tone_engine_switch_mid_note_no_hang_no_click)
 
 TEST (tone_sampler_synthetic_bank_loads_and_plays)
 {
-    const std::string dir = "/tmp/solo_synth_bank";
+    const std::string dir = tempDir ("solo_synth_bank"); // portable (Windows: %TEMP%)
     std::string err;
-    (void) std::system (("mkdir -p " + dir).c_str());
     const auto sfz = makeSyntheticBank (dir, err);
     CHECK_MSG (! sfz.empty(), err);
     if (sfz.empty()) return;
@@ -508,12 +514,16 @@ TEST (tone_state_without_sfz_file_falls_back)
 {
     std::string err;
     SampleBank b;
-    CHECK (! loadSfz ("/tmp/no-existe/banco.sfz", b, err));
+    CHECK (! loadSfz (tempDir ("no-existe") + "/banco.sfz", b, err));
     CHECK (! err.empty());
     // SFZ con samples ausentes: error descriptivo, sin excepción.
-    const std::string dir = "/tmp/solo_bad_sfz";
-    (void) std::system (("mkdir -p " + dir).c_str());
-    { std::FILE* f = std::fopen ((dir + "/malo.sfz").c_str(), "wb"); std::fputs ("<region> sample=no.wav key=60\n<region> key=61\n", f); std::fclose (f); }
+    const std::string dir = tempDir ("solo_bad_sfz");
+    std::filesystem::create_directories (dir);
+    {
+        std::FILE* f = std::fopen ((dir + "/malo.sfz").c_str(), "wb");
+        CHECK (f != nullptr);
+        if (f != nullptr) { std::fputs ("<region> sample=no.wav key=60\n<region> key=61\n", f); std::fclose (f); }
+    }
     CHECK (! loadSfz (dir + "/malo.sfz", b, err));
     std::printf ("  error esperado: %s\n", err.c_str());
 }
@@ -563,7 +573,7 @@ TEST (tone_v3_no_allocations_in_audio_thread)
         {
             auto bank = std::make_shared<SampleBank>();
             std::string err;
-            if (loadSfz ("/tmp/solo_synth_bank/guitarra-sintetica.sfz", *bank, err)) e.publishSampleBank (bank);
+            if (loadSfz (tempDir ("solo_synth_bank") + "/guitarra-sintetica.sfz", *bank, err)) e.publishSampleBank (bank);
         }
         e.publishSequence (makePlaybackData (seq, 0, true));
         e.prepare (44100, 512);

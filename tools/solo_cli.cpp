@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -504,7 +505,7 @@ int cmdBench()
     }
     {
         std::string err;
-        const auto sfz = makeSyntheticBank ("/tmp/solo_bench_bank", err);
+        const auto sfz = makeSyntheticBank ((std::filesystem::temp_directory_path() / "solo_bench_bank").string(), err);
         auto bank = std::make_shared<SampleBank>();
         if (! sfz.empty() && loadSfz (sfz, *bank, err))
         {
