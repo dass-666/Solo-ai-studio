@@ -6,7 +6,7 @@ namespace
 {
 const juce::Colour kBg (0xff101216), kPanel (0xff181b21), kText (0xffd7dce5), kDim (0xff8a93a3),
     kAccent (0xff2ec4b6), kError (0xffff6b6b);
-constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 206;
+constexpr int kHeader = 44, kStatus = 24, kLeft = 296, kPro = 272;
 
 juce::String U (const char* s) { return juce::String::fromUTF8 (s); }
 

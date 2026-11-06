@@ -652,8 +652,12 @@ void EffectsChain::process (float* left, float* right, int numSamples, const FxS
             const int size = (int) delayL.size();
             float rp = (float) delayPos - delaySmoothed;
             if (rp < 0) rp += (float) size;
-            const int i1 = (int) rp;
-            const float fr = rp - (float) i1;
+            // Defecto encontrado con ASan: con rp = -ε, rp + size redondea en float exactamente a size y el índice se salía
+            // del búfer (lectura fuera de rango). Se envuelve también tras el redondeo.
+            int i1 = (int) rp;
+            float fr = rp - (float) i1;
+            if (i1 >= size) { i1 -= size; fr = 0.0f; }
+            if (i1 < 0) { i1 = 0; fr = 0.0f; }
             const int i2 = (i1 + 1) % size;
             const float dl = delayL[(size_t) i1] + fr * (delayL[(size_t) i2] - delayL[(size_t) i1]);
             const float dr = delayR[(size_t) i1] + fr * (delayR[(size_t) i2] - delayR[(size_t) i1]);

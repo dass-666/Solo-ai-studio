@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -235,6 +236,11 @@ bool loadSfz (const std::string& sfzPath, SampleBank& out, std::string& error, s
 
 std::string makeSyntheticBank (const std::string& dir, std::string& error, int sampleRate)
 {
+    {
+        std::error_code ec;
+        std::filesystem::create_directories (std::filesystem::u8path (dir), ec);
+        if (ec) { error = "No se pudo crear la carpeta " + dir + ": " + ec.message(); return {}; }
+    }
     // Notas E2..E6 cada 3 semitonos, 2 capas de velocity, 2 round-robin (semillas distintas), 1.6 s cada una.
     ModeledGuitarEngine eng;
     eng.prepare (sampleRate);

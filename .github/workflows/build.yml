@@ -44,6 +44,11 @@ jobs:
           mkdir examples-out
           build/Release/solo_cli.exe demos examples-out
 
+      - name: Guitar Tone Studio v3 (mismo MIDI con cada rig, a -18 LUFS)
+        run: |
+          mkdir tone-out
+          build/Release/solo_cli.exe tone-ab tone-out
+
       - name: Empaquetar (VST3 + standalone + instalador + guía + ejemplos)
         shell: pwsh
         run: |
@@ -55,9 +60,11 @@ jobs:
           Copy-Item docs/INSTALL.md package/LEEME.md
           Copy-Item docs/MIDI.md package/
           Copy-Item docs/LICENSES.md package/
+          Copy-Item docs/GUITAR-TONE.md package/
           $cli = "build/Release/solo_cli.exe"
-          & $cli generate --key Am --prog "Am F C G" --bpm 146 --style rock --fx "Classic Rock Lead" --seed 1 --out package/ejemplos/01-rock-Am-146
-          & $cli generate --key A --prog "A7 D7 A7 E7" --bpm 96 --bars 8 --style blues --fx "Blues Lead" --seed 7 --out package/ejemplos/02-blues-A-96
+          & $cli generate --key Am --prog "Am F C G" --bpm 146 --style rock --tone "Rock Lead" --seed 1 --out package/ejemplos/01-rock-Am-146
+          & $cli generate --key A --prog "A7 D7 A7 E7" --bpm 96 --bars 8 --style blues --tone "Blues Lead" --seed 7 --out package/ejemplos/02-blues-A-96
+          & $cli generate --key Am --prog "Am F C G" --bpm 146 --style rock --fx "Classic Rock Lead" --seed 1 --out package/ejemplos/01b-rock-Am-146-motor-v2
           & $cli generate --key Dm --prog "Dm Bb F C" --bpm 80 --instrument flute --style cinematic --fx "Cinematic Lead" --seed 3 --out package/ejemplos/03-cinematico-flauta-Dm-80
           & $cli synthvoice package/ejemplos/04-voz-sintetica-Am-100.wav
           $commit = "${{ github.sha }}"
@@ -94,6 +101,11 @@ jobs:
         with:
           name: SoloAIStudio-ejemplos
           path: examples-out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SoloAIStudio-tono-v3-demos
+          path: tone-out/
 
       - uses: actions/upload-artifact@v4
         if: always()

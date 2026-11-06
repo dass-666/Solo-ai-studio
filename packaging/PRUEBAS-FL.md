@@ -24,3 +24,19 @@ Versión de FL: ______ · Interfaz de audio y buffer: ______ · Fecha: ______
 | 10 | Buffer de audio 128 / 512 / 1024 | Sin clics ni cortes | |
 | 11 | CPU del canal con «High Gain Solo» (Mixer o herramienta de rendimiento de FL) | Anota el valor | |
 | 12 | Escuchar `ejemplos\` y las demos A/B | Opinión musical: es la primera escucha humana | |
+
+## Guitar Tone Studio v3
+
+| # | Prueba | Qué debe pasar | Resultado |
+|---|---|---|---|
+| 13 | **Sincronía (de nuevo)**: proyecto a 120 BPM, GENERAR, Play en FL; saltar, loop, Stop. Si falla, pulsa Pro › Generación › «Diagnóstico transporte» y adjunta `Documentos\Solo AI Studio\diagnostico-transporte.txt` | Empieza alineado; el diagnóstico muestra «resync» solo al saltar/parar | |
+| 14 | **Tono**: con FL sonando, cambiar Tono entre Rock Lead, Blues Lead y Ambient Guitar | Se oyen tres guitarras distintas (saturación, pantalla, cola) sin cortes | |
+| 15 | **Fuerza**: girar de 0 a 100 % mientras suena | De limpio a saturado sin saltos de volumen bruscos; Pro › Ampli / Samples muestra «Previo dB» de 2 a 24 | |
+| 16 | **Expresión**: 0 %, GENERAR; 100 %, GENERAR (misma semilla fijada en Pro) | Mismas notas; a 0 % sin vibrato/bends, a 100 % más gestos | |
+| 17 | **Ambiente**: 0 % y 100 % mientras suena | Sin cola / cola larga con predelay; sin clics ni realimentación creciente | |
+| 18 | **Guitarra = v2 (anterior)** con el mismo solo | Suena como la versión anterior (comparación A/B) | |
+| 19 | **Samples**: Pro › Ampli / Samples › «Banco sintético de prueba» (y, si tienes una, «Cargar SFZ…» con tu biblioteca) | Suena; al guardar y reabrir el FLP se recarga; si borras el SFZ, aviso en la pestaña y silencio sin fallo | |
+| 20 | **IR**: «Cargar IR (WAV)…» con una IR tuya; luego «Quitar» | Cambia la pantalla; el proyecto guarda la ruta | |
+| 21 | **Latencia**: con un ampli v3 (2x) el canal declara 31 muestras (46 con 4x); el MIDI exportado y el audio siguen alineados | FL compensa (PDC) sin desplazar las notas | |
+| 22 | **Exportar MIDI con pitch bend** y arrastrarlo a un sinte de FL | Los bends/vibratos del solo aparecen como pitch bend; sin curva a Expresión 0 % | |
+| 23 | **CPU** con High Gain Solo (4x) y con Rock Lead (2x) | Anota los valores | |

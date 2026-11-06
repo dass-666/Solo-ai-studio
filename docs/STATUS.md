@@ -76,3 +76,21 @@ Rama `claude/solo-ai-studio-fl-prep` (sale de `88eabdd`). Pruebas nuevas:
 Defectos corregidos (cada uno con su prueba):
 - Mover cualquier control durante la reproducción cortaba la nota que sonaba, que además no se reanudaba. Causa: el plugin republicaba la secuencia aunque no cambiara.
 - Transponer y añadir o quitar articulaciones sin compases elegidos fallaba siempre. Causa: el rango −1 («todo el solo») no se interpretaba.
+
+## Guitar Tone Studio v3 (2026-11-06)
+
+Rama `claude/solo-ai-studio-v3-guitar-tone` (sale de `6cf4ab6`). Detalle en `docs/GUITAR-TONE.md`.
+
+| Pieza | Estado | Evidencia |
+|---|---|---|
+| Transporte: reloj interno enganchado al host, posición en muestras, diagnóstico exportable | Parcial | 6 pruebas (`TestTransport.cpp`); **no validado en FL Studio** |
+| `GuitarSoundEngine`: motor modelado v3 y motor de samples; motor v2 intacto para A/B | Validado | `TestTone.cpp`, en vivo = exportado, cambio de motor a mitad de nota |
+| Ampli v3 (compresor, previo, válvula, potencia, tonestack, pantalla/IR, oversampling 2x/4x) | Validado | nivel ±3 dB en Fuerza 0..100, aliasing −28/−46 dB, latencia 31/46 muestras declarada |
+| Macros Fuerza/Expresión/Ambiente → valores DSP reales, deshacer, estado | Validado | `tone_macros_write_real_dsp_values`, ida y vuelta de estado, fallback de estados v2 |
+| Seis presets de tono calibrados a −18 LUFS, diferenciación objetiva | Validado (objetivo), **sin escucha humana** | `tone_presets_differ_objectively`, `solo_cli tone-ab` |
+| Sampler SFZ con banco sintético etiquetado | Parcial | solo probado con el banco sintético; sin biblioteca real |
+| Interfaz: perillas en Fácil, pestaña Ampli / Samples en Pro, latencia al host | Parcial | capturas del standalone en Xvfb; sin FL Studio |
+| CPU v3 | Parcial | 2–3 % media (2x), 6 % (4x); picos aislados sin confirmar fuera del contenedor |
+
+Resultados de la prueba manual de Diego en FL Studio (versión FL-prep): carga ✔, sincronización ✘, edición en
+vivo ✔, MIDI/WAV ✔, guardar FLP ✔. La sincronización sigue **sin validar** tras la corrección.

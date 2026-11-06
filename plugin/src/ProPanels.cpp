@@ -363,26 +363,27 @@ void TonePanel::refresh()
                         : fx.cabIrPath.empty() ? U ("Pantalla: modelo interno (sin IR)")
                         : rr.irError.isNotEmpty() && rr.irSummary.isEmpty() ? U ("Error IR: ") + rr.irError : U ("IR: ") + rr.irSummary;
     irLabel.setText (irText, juce::dontSendNotification);
-    latencyLabel.setText (U ("Latencia declarada: ") + juce::String (rr.latencySamples) + U (" muestras"), juce::dontSendNotification);
+    irLabel.setText (irText + U (" · latencia ") + juce::String (rr.latencySamples) + U (" muestras"), juce::dontSendNotification);
 }
 
 void TonePanel::resized()
 {
     auto a = getLocalBounds().reduced (8, 4);
     auto r0 = row (a, 24);
-    r0.add (engineLabel, 44); r0.add (engineBox, 170); r0.add (sfzButton, 100); r0.add (synthButton, 170); r0.add (sfzClear, 56); r0.rest (bankLabel);
+    r0.add (engineLabel, 44); r0.add (engineBox, 170); r0.add (sfzButton, 100); r0.add (synthButton, 170); r0.add (sfzClear, 56);
+    r0.add (irButton, 120); r0.add (irClear, 50);
     auto r1 = row (a, 24);
-    r1.add (satLabel, 70); r1.add (satBox, 110); r1.add (oversampleLabel, 86); r1.add (oversampleBox, 60); r1.add (irButton, 130); r1.add (irClear, 56);
-    r1.add (irLabel, 420); r1.rest (latencyLabel);
-    const int perRow = 5;
+    r1.add (satLabel, 66); r1.add (satBox, 110); r1.add (oversampleLabel, 84); r1.add (oversampleBox, 60); r1.add (pickupLabel, 54); r1.add (pickupBox, 140);
+    auto r2 = row (a, 20);
+    r2.add (bankLabel, r2.r.getWidth() / 2 - 4); r2.rest (irLabel);
+    latencyLabel.setBounds (0, 0, 0, 0); // la latencia va en el texto de la IR
+    const int perRow = 4;
     for (size_t i = 0; i < params.size(); i += perRow)
     {
         auto rr = row (a, 22);
         const int w = rr.r.getWidth() / perRow;
         for (size_t j = i; j < std::min (params.size(), i + perRow); ++j) { rr.add (*labels[(int) j], 92); rr.add (*sliders[(int) j], w - 104); }
     }
-    auto r5 = row (a, 22);
-    r5.add (pickupLabel, 60); r5.add (pickupBox, 150);
 }
 
 // ============================================================ Automatización

@@ -65,6 +65,7 @@ El proyecto se guarda dentro del `.flp`: solo, variaciones, favoritas, bloqueos,
 - *Arrastrar MIDI al DAW* depende del host y no está probado en FL.
 - Si los bends del MIDI exportado suenan pequeños en otro sinte, sube su rango de pitch bend a 12 semitonos.
 - La flauta tiene un ataque de soplo suave: medido, suena unos 30 ms más tarde que la guitarra.
+- Guitar Tone Studio v3 (Tono, Guitarra y las perillas Fuerza / Expresión / Ambiente; Pro › Ampli / Samples): ver `GUITAR-TONE.md`. Con el ampli v3 el plugin declara 31 muestras de latencia (46 con oversampling 4x); FL la compensa automáticamente.
 
 ## 6. Si algo falla
 

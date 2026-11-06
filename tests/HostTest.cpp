@@ -11,6 +11,7 @@
 #include <juce_events/juce_events.h>
 #include "solo/SoloComposer.h"
 #include "solo/StateManager.h"
+#include "solo/ToneStudio.h"
 #include <cstdio>
 #include <map>
 
@@ -249,8 +250,10 @@ int main (int argc, char** argv)
                     st.slotB = st.history.all()[2].id;
                     st.lockedBars = { true, false, false, false, false, false, false, false };
                     st.settings.fxEnabled = true;
-                    st.settings.fxPreset = "Blues Lead";
-                    st.fx = solo::fxPresets()[(size_t) solo::fxPresetIndex ("Blues Lead")].settings;
+                    {   // preset de TONO v3 (ampli + guitarra + macros), como un proyecto nuevo
+                        const auto& tp = solo::tonePresets()[(size_t) solo::tonePresetIndex ("Blues Lead")];
+                        st.settings.fxPreset = tp.name; st.fx = tp.fx; st.guitar = tp.guitar; st.macros = tp.macros; st.settings.guitarEngine = (int) tp.engine;
+                    }
                     auto& lane = st.automation.lane (solo::AutoTarget::DelayMix);
                     lane.enabled = true;
                     lane.points = { { 0, 0.2f }, { 4 * 4 * solo::kPPQ, 0.8f }, { 8 * 4 * solo::kPPQ, 0.4f } };
@@ -274,7 +277,7 @@ int main (int argc, char** argv)
                         check (png.writeImageToStream (img, os), "Captura del editor guardada: " + f.getFileName());
                     };
                     capture (false, 0, "-facil");
-                    for (int t = 0; t < 7; ++t) capture (true, t, "-pro" + juce::String (t));
+                    for (int t = 0; t < 8; ++t) capture (true, t, "-pro" + juce::String (t));
                 }
                 ed.reset();
             }

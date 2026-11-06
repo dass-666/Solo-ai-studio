@@ -1,10 +1,12 @@
 // solo_cli: herramienta de línea de comandos con el mismo núcleo que el plugin.
-//   solo_cli generate [opciones]            genera un solo (MIDI + WAV con efectos)
+//   solo_cli generate [opciones]            genera un solo (MIDI + WAV con efectos; --tone "Rock Lead" --force 70 --expression 65 --ambience 35)
 //   solo_cli examples <carpeta>             batería de ejemplos
 //   solo_cli demos <carpeta>                7 demos antes (S0–S2) / después (v2) a igual sonoridad + métricas
 //   solo_cli hum <voz.wav> <carpeta> [...]  Hum-to-Solo en los 4 modos
 //   solo_cli synthvoice <salida.wav>        voz sintética de prueba
-//   solo_cli bench                          CPU y memoria del motor en tiempo real
+//   solo_cli bench                          CPU y memoria del motor en tiempo real (v2 y v3)
+//   solo_cli tone-ab <carpeta>              Guitar Tone Studio v3: mismo MIDI con cada rig, a -18 LUFS, + métricas
+//   solo_cli makebank <carpeta>             banco SFZ sintético de prueba (etiquetado; no son samples reales)
 //   solo_cli calibrate                      sonoridad de los presets de efectos
 //   solo_cli command "<orden>"              interpreta una orden en español (vista previa)
 #include "solo/Analysis.h"
@@ -12,17 +14,21 @@
 #include "solo/Commands.h"
 #include "solo/MidiFile.h"
 #include "solo/Project.h"
+#include "solo/Sampler.h"
 #include "solo/SoloEngine.h"
+#include "solo/ToneStudio.h"
 #include "solo/StateManager.h"
 #include "solo/VoiceAnalysis.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 
 using namespace solo;
@@ -85,7 +91,7 @@ void printSequence (const Sequence& s, const ComposerParams& p)
 struct Rendered { EngineRenderResult r; double lufs = 0; };
 
 Rendered renderOut (const Sequence& s, const ComposerParams& p, const FxSettings& fx, const std::string& prefix,
-                    double normaliseTo = 0.0, int sampleRate = 48000)
+                    double normaliseTo = 0.0, int sampleRate = 48000, const GuitarRigSettings* rig = nullptr)
 {
     Rendered out;
     MidiExportOptions mo;
@@ -98,6 +104,7 @@ Rendered renderOut (const Sequence& s, const ComposerParams& p, const FxSettings
     eo.sampleRate = sampleRate;
     eo.instrument = p.instrument;
     eo.fx = fx;
+    if (rig != nullptr) { eo.rig = *rig; mo.expressionPercent = rig->engine == GuitarEngineKind::LegacyV2 ? -1.0 : rig->expression.amount * 100.0; }
     out.r = renderWithEngine (s, eo);
     if (normaliseTo < 0) normaliseLoudness (out.r.left, out.r.right, sampleRate, normaliseTo, 0.89f);
     out.lufs = integratedLoudness (out.r.left, out.r.right, sampleRate);
@@ -129,15 +136,62 @@ int cmdGenerate (int argc, char** argv)
     if (! parseInstrument (get ("instrument", "guitar"), st.instrument)) { std::fprintf (stderr, "Instrumento desconocido\n"); return 2; }
     if (! parseStyle (get ("style", "rock"), st.style)) { std::fprintf (stderr, "Estilo desconocido\n"); return 2; }
     const double bpm = std::atof (get ("bpm", "120").c_str());
+    // Guitar Tone Studio v3: --tone "<preset>" [--force F --expression E --ambience A] [--guitar modelada|samples|v2 --sfz ruta]
+    ProjectController pc;
+    pc.bpm = bpm;
+    pc.state.settings = st;
+    bool v3 = false;
+    if (a.count ("tone")) { const auto r = pc.setTonePreset (a.at ("tone")); if (! r.ok) { std::fprintf (stderr, "%s\n", r.message.c_str()); return 2; } v3 = true; }
+    if (a.count ("force") || a.count ("expression") || a.count ("ambience"))
+    {
+        if (! v3) { pc.setTonePreset ("Rock Lead"); v3 = true; }
+        ToneMacros m = pc.state.macros;
+        if (a.count ("force")) m.force = std::atof (a.at ("force").c_str());
+        if (a.count ("expression")) m.expression = std::atof (a.at ("expression").c_str());
+        if (a.count ("ambience")) m.ambience = std::atof (a.at ("ambience").c_str());
+        pc.setMacros (m);
+    }
+    if (a.count ("guitar"))
+    {
+        const auto g = a.at ("guitar");
+        v3 = true;
+        pc.setGuitarEngine (g == "samples" ? GuitarEngineKind::Samples : g == "v2" ? GuitarEngineKind::LegacyV2 : GuitarEngineKind::Modeled);
+    }
+    SharedBank bank;
+    if (a.count ("sfz"))
+    {
+        auto b = std::make_shared<SampleBank>(); std::string e;
+        if (! loadSfz (a.at ("sfz"), *b, e)) { std::fprintf (stderr, "SFZ: %s\n", e.c_str()); return 2; }
+        if (! e.empty()) std::printf ("Aviso SFZ: %s\n", e.c_str());
+        std::printf ("Banco: %s\n", b->summary().c_str());
+        bank = b;
+        pc.setGuitarEngine (GuitarEngineKind::Samples);
+        v3 = true;
+    }
     ComposerParams p;
     std::string err;
-    if (! st.toComposerParams (bpm, p, err)) { std::fprintf (stderr, "Error: %s\n", err.c_str()); return 2; }
+    if (! pc.params (p, err)) { std::fprintf (stderr, "Error: %s\n", err.c_str()); return 2; }
     for (const auto& w : p.progression.validate (p.key)) std::printf ("Aviso: %s\n", w.c_str());
     const auto s = SoloComposer::compose (p);
     printSequence (s, p);
     std::printf ("Métricas: %s\n", analyseSolo (s, p).toString().c_str());
     const std::string fx = get ("fx", st.engine == 1 ? "none" : "Emotional Lead");
-    const auto r = renderOut (s, p, fx == "none" ? FxSettings {} : fxByName (fx), get ("out", "solo"), 0.0, std::atoi (get ("rate", "48000").c_str()));
+    GuitarRigSettings rig = pc.rigSettings();
+    if (v3)
+    {
+        std::printf ("Tono v3: %s · motor %s · Fuerza %.0f %% (previo %.1f dB) · Expresión %.0f %% · Ambiente %.0f %% (reverb %.1f %%, delay %.1f %%)\n",
+                     pc.state.settings.fxPreset.c_str(), guitarEngineName (rig.engine), pc.state.macros.force, pc.state.fx.ampPreGainDb,
+                     pc.state.macros.expression, pc.state.macros.ambience, pc.state.fx.reverbMix * 100, pc.state.fx.delayMix * 100);
+    }
+    const auto r = v3 ? [&] { Rendered out; MidiExportOptions mo; mo.key = p.key; mo.gmProgram = profileFor (p.instrument).gmProgram;
+                                mo.trackName = std::string ("Solo AI Studio - ") + instrumentName (p.instrument); mo.expressionPercent = pc.state.macros.expression;
+                                std::string e; if (! saveMidiFile (get ("out", "solo") + ".mid", s, mo, e)) std::fprintf (stderr, "%s\n", e.c_str());
+                                EngineRenderOptions eo; eo.sampleRate = std::atoi (get ("rate", "48000").c_str()); eo.instrument = p.instrument; eo.fx = pc.state.fx;
+                                eo.rig = rig; eo.bank = bank; out.r = renderWithEngine (s, eo);
+                                out.lufs = integratedLoudness (out.r.left, out.r.right, eo.sampleRate);
+                                if (! writeWav24 (get ("out", "solo") + ".wav", out.r.left, out.r.right, (int) eo.sampleRate, e)) std::fprintf (stderr, "%s\n", e.c_str());
+                                return out; }()
+                      : renderOut (s, p, fx == "none" ? FxSettings {} : fxByName (fx), get ("out", "solo"), 0.0, std::atoi (get ("rate", "48000").c_str()));
     std::printf ("-> %s.mid / .wav (pico %.3f, %.1f LUFS, cola %.1f s)\n", get ("out", "solo").c_str(), r.r.peak, r.lufs, r.r.tailSeconds);
     return 0;
 }
@@ -266,6 +320,166 @@ long peakRssKb()
     return -1;
 }
 
+
+// ============================================================ Guitar Tone Studio v3
+struct ToneProfile { double lufs = -70, brightDb = 0, crestDb = 0, tailDb = -90, widthDb = -90; };
+
+// Métricas baratas en el dominio del tiempo (las mismas que la prueba tone_presets_differ_objectively).
+ToneProfile profileOf (const EngineRenderResult& r, double sr, double bodyEndSec)
+{
+    ToneProfile p;
+    const auto& L = r.left; const auto& R = r.right;
+    if (L.empty()) return p;
+    p.lufs = integratedLoudness (L, R, sr);
+    const double kPi = 3.141592653589793;
+    const double aLo = std::exp (-2 * kPi * 400.0 / sr), aHi = std::exp (-2 * kPi * 2500.0 / sr);
+    double lo = 0, hi = 0, hiState = 0, loState = 0, sum2 = 0, peak = 0, body = 0, tail = 0, mid = 0, side = 0;
+    const size_t bodyEnd = std::min (L.size(), (size_t) (bodyEndSec * sr));
+    for (size_t i = 0; i < L.size(); ++i)
+    {
+        const double x = L[i];
+        loState = aLo * loState + (1 - aLo) * x; lo += loState * loState;
+        hiState = aHi * hiState + (1 - aHi) * x; const double h = x - hiState; hi += h * h;
+        sum2 += x * x; peak = std::max (peak, std::abs (x));
+        (i < bodyEnd ? body : tail) += x * x;
+        const double m = 0.5 * (L[i] + R[i]), s = 0.5 * (L[i] - R[i]);
+        mid += m * m; side += s * s;
+    }
+    p.brightDb = 10 * std::log10 (std::max (1e-30, hi) / std::max (1e-30, lo));
+    p.crestDb = 20 * std::log10 (std::max (1e-30, peak) / std::sqrt (std::max (1e-30, sum2 / (double) L.size())));
+    p.tailDb = 10 * std::log10 (std::max (1e-30, tail) / std::max (1e-30, body));
+    p.widthDb = 10 * std::log10 (std::max (1e-30, side) / std::max (1e-30, mid));
+    return p;
+}
+
+Sequence toneDemoSolo (ComposerParams& p, double expression = 65.0, uint64_t seed = 4242)
+{
+    Key::parse ("Am", p.key);
+    std::string err;
+    Progression::parse ("Am F C G", p.progression, err);
+    p.bars = 8; p.bpm = 110; p.seed = seed; p.style = Style::MelodicRock; p.energy = 0.65; p.density = 0.5; p.complexity = 0.45;
+    p.expression = expression;
+    return SoloComposer::compose (p);
+}
+
+// Renderiza el MISMO solo con un rig v3 (o v2) y lo normaliza a -18 LUFS; devuelve el perfil medido ANTES de normalizar.
+ToneProfile renderToneDemo (const Sequence& s, const FxSettings& fx, const GuitarParams& g, GuitarEngineKind k, double expression,
+                            const std::string& path, SharedBank bank = {}, double* lufsAfter = nullptr)
+{
+    EngineRenderOptions eo;
+    eo.sampleRate = 48000; eo.instrument = InstrumentId::Guitar; eo.fx = fx;
+    eo.rig.engine = k; eo.rig.guitar = g; eo.rig.expression = expressionScaling (expression); eo.bank = std::move (bank);
+    eo.extraTailSeconds = 1.0; eo.maxTailSeconds = 6.0;
+    auto r = renderWithEngine (s, eo);
+    const double bodyEnd = (double) s.lengthTicks() / kPPQ * 60.0 / (s.bpm > 0 ? s.bpm : 110.0);
+    const auto prof = profileOf (r, 48000, bodyEnd);
+    normaliseLoudness (r.left, r.right, 48000, -18.0, 0.89f);
+    if (lufsAfter) *lufsAfter = integratedLoudness (r.left, r.right, 48000);
+    std::string err;
+    if (! writeWav24 (path, r.left, r.right, 48000, err)) std::fprintf (stderr, "%s\n", err.c_str());
+    return prof;
+}
+
+int cmdMakeBank (const std::string& dir)
+{
+    std::string err;
+    const auto sfz = makeSyntheticBank (dir, err);
+    if (sfz.empty()) { std::fprintf (stderr, "No se pudo generar el banco: %s\n", err.c_str()); return 1; }
+    SampleBank b;
+    if (! loadSfz (sfz, b, err)) { std::fprintf (stderr, "El banco generado no carga: %s\n", err.c_str()); return 1; }
+    std::printf ("Banco SINTÉTICO (modelo físico, no samples reales) escrito en %s\n  %s\n", sfz.c_str(), b.summary().c_str());
+    return 0;
+}
+
+int cmdToneAb (int argc, char** argv)
+{
+    const std::string dir = argv[2];
+    const auto args = parseArgs (argc, argv, 3);
+    const double expression = args.count ("expression") ? std::atof (args.at ("expression").c_str()) : 65.0;
+    ComposerParams p;
+    const auto s = toneDemoSolo (p, expression);
+    // MIDI editable (sin pitch bend) y MIDI con los mismos gestos que suenan.
+    {
+        MidiExportOptions mo; mo.key = p.key; mo.trackName = "Solo AI Studio - demo tono"; std::string err;
+        mo.pitchBend = false; saveMidiFile (dir + "/demo_tono_limpio.mid", s, mo, err);
+        mo.pitchBend = true; mo.expressionPercent = expression; saveMidiFile (dir + "/demo_tono_gestos.mid", s, mo, err);
+    }
+    std::ofstream md (dir + "/metricas-tono.md");
+    md << "# Guitar Tone Studio v3: mismo MIDI, distintos rigs\n\n"
+          "Solo: Am | Am F C G | 8 compases | 110 BPM | semilla 4242 | Expresión " << expression << " %. "
+          "Todos los WAV normalizados a -18 LUFS (pico <= -1 dBFS) para comparar a igual sonoridad.\n"
+          "Métricas ANTES de normalizar (brillo = energía >2.5 kHz / <400 Hz; cresta = pico/RMS; cola = energía tras la última nota / cuerpo; "
+          "anchura = lado/centro). Son medidas objetivas, no una evaluación auditiva humana.\n\n"
+          "| Archivo | Motor | Preset / macros | LUFS | Brillo dB | Cresta dB | Cola dB | Anchura dB |\n|---|---|---|---|---|---|---|---|\n";
+    auto rowOf = [&] (const std::string& file, const std::string& engine, const std::string& preset, const ToneProfile& pr) {
+        char row[400];
+        std::snprintf (row, sizeof row, "| %s | %s | %s | %.1f | %.1f | %.1f | %.1f | %.1f |\n", file.c_str(), engine.c_str(), preset.c_str(),
+                       pr.lufs, pr.brightDb, pr.crestDb, pr.tailDb, pr.widthDb);
+        md << row;
+        std::printf ("%-34s %-22s %-34s %6.1f LUFS  brillo %5.1f  cresta %5.1f  cola %6.1f\n", file.c_str(), engine.c_str(), preset.c_str(), pr.lufs, pr.brightDb, pr.crestDb, pr.tailDb);
+    };
+    // v2 (referencia A/B): motor anterior + presets de efectos v2
+    for (const char* name : { "Classic Rock Lead", "Blues Lead", "Ambient Guitar" })
+    {
+        const std::string file = std::string ("v2_") + name + ".wav";
+        std::replace_if (const_cast<std::string&> (file).begin(), const_cast<std::string&> (file).end(), [] (char c) { return c == ' '; }, '_');
+        const auto pr = renderToneDemo (s, fxByName (name), GuitarParams {}, GuitarEngineKind::LegacyV2, 65.0, dir + "/" + file);
+        rowOf (file, "v2 (anterior)", name, pr);
+    }
+    // v3: los seis presets de tono con sus macros de fábrica
+    for (const auto& tp : tonePresets())
+    {
+        std::string file = std::string ("v3_") + tp.name + ".wav";
+        std::replace (file.begin(), file.end(), ' ', '_');
+        const auto pr = renderToneDemo (s, tp.fx, tp.guitar, tp.engine, tp.macros.expression, dir + "/" + file);
+        char m[96]; std::snprintf (m, sizeof m, "%s (F %.0f / E %.0f / A %.0f)", tp.name, tp.macros.force, tp.macros.expression, tp.macros.ambience);
+        rowOf (file, guitarEngineName (tp.engine), m, pr);
+    }
+    // Barrido de Fuerza y Ambiente sobre Rock Lead (las macros escriben valores DSP reales)
+    {
+        const auto& rock = tonePresets()[(size_t) tonePresetIndex ("Rock Lead")];
+        for (double F : { 0.0, 35.0, 70.0, 100.0 })
+        {
+            FxSettings fx = rock.fx; GuitarParams g = rock.guitar; ToneMacros m = rock.macros; m.force = F; applyMacros (m, fx, g);
+            char file[64]; std::snprintf (file, sizeof file, "v3_Rock_Lead_fuerza_%03d.wav", (int) F);
+            char label[96]; std::snprintf (label, sizeof label, "Rock Lead, Fuerza %.0f %% (previo %.1f dB)", F, fx.ampPreGainDb);
+            rowOf (file, "Guitarra modelada v3", label, renderToneDemo (s, fx, g, rock.engine, m.expression, dir + "/" + file));
+        }
+        for (double A : { 0.0, 35.0, 100.0 })
+        {
+            FxSettings fx = rock.fx; GuitarParams g = rock.guitar; ToneMacros m = rock.macros; m.ambience = A; applyMacros (m, fx, g);
+            char file[64]; std::snprintf (file, sizeof file, "v3_Rock_Lead_ambiente_%03d.wav", (int) A);
+            char label[128]; std::snprintf (label, sizeof label, "Rock Lead, Ambiente %.0f %% (reverb %.1f %%, delay %.1f %%)", A, fx.reverbMix * 100, fx.delayMix * 100);
+            rowOf (file, "Guitarra modelada v3", label, renderToneDemo (s, fx, g, rock.engine, m.expression, dir + "/" + file));
+        }
+        // Expresión: 0 % (sin gestos) frente a 100 % (más gestos), regenerando el solo con la misma semilla
+        for (double E : { 0.0, 100.0 })
+        {
+            ComposerParams pe; const auto se = toneDemoSolo (pe, E);
+            FxSettings fx = rock.fx; GuitarParams g = rock.guitar; ToneMacros m = rock.macros; m.expression = E; applyMacros (m, fx, g);
+            char file[64]; std::snprintf (file, sizeof file, "v3_Rock_Lead_expresion_%03d.wav", (int) E);
+            char label[96]; std::snprintf (label, sizeof label, "Rock Lead, Expresión %.0f %% (mismo solo regenerado)", E);
+            rowOf (file, "Guitarra modelada v3", label, renderToneDemo (se, fx, g, rock.engine, E, dir + "/" + file));
+        }
+    }
+    // Motor de samples con el banco sintético (claramente etiquetado): se genera en <dir>/banco-sintetico
+    {
+        std::string err;
+        const auto sfz = makeSyntheticBank (dir + "/banco-sintetico", err);
+        auto bank = std::make_shared<SampleBank>();
+        if (! sfz.empty() && loadSfz (sfz, *bank, err))
+        {
+            const auto& rock = tonePresets()[(size_t) tonePresetIndex ("Rock Lead")];
+            const auto pr = renderToneDemo (s, rock.fx, rock.guitar, GuitarEngineKind::Samples, rock.macros.expression, dir + "/v3_Rock_Lead_samples_sinteticos.wav", bank);
+            rowOf ("v3_Rock_Lead_samples_sinteticos.wav", "Guitarra con samples", "Rock Lead + banco SINTÉTICO de prueba", pr);
+        }
+        else std::fprintf (stderr, "Banco sintético no disponible: %s\n", err.c_str());
+    }
+    md << "\nMIDI: demo_tono_limpio.mid (notas sin pitch bend) y demo_tono_gestos.mid (pitch bend = los gestos que suenan).\n";
+    std::printf ("-> %s/metricas-tono.md\n", dir.c_str());
+    return 0;
+}
+
 int cmdBench()
 {
     ComposerParams p;
@@ -280,13 +494,32 @@ int cmdBench()
     std::printf ("Solo de prueba: %zu notas (rock virtuoso, 140 BPM). Bloques de 256 muestras a 48 kHz, 60 s de audio.\n", s.notes.size());
     std::printf ("%-20s %10s %9s %9s %10s %8s %10s\n", "Preset", "media %", "p99 %", "p99.9 %", "peor %", "(bloque)", "x t.real");
     const long rss0 = peakRssKb();
-    std::vector<std::pair<std::string, FxSettings>> sets { { "Sin efectos", FxSettings {} } };
-    for (const auto& pr : fxPresets()) sets.push_back ({ pr.name, pr.settings });
-    for (const auto& [name, fx] : sets)
+    struct Set { std::string name; FxSettings fx; GuitarRigSettings rig; SharedBank bank; };
+    std::vector<Set> sets { { "Sin efectos (v2)", FxSettings {}, {}, {} } };
+    for (const auto& pr : fxPresets()) sets.push_back ({ std::string (pr.name) + " (v2)", pr.settings, {}, {} });
+    for (const auto& tp : tonePresets())
+    {
+        GuitarRigSettings rig; rig.engine = tp.engine; rig.guitar = tp.guitar; rig.expression = expressionScaling (tp.macros.expression);
+        sets.push_back ({ std::string (tp.name) + " (v3 " + std::to_string (tp.fx.ampOversample) + "x)", tp.fx, rig, {} });
+    }
+    {
+        std::string err;
+        const auto sfz = makeSyntheticBank ("/tmp/solo_bench_bank", err);
+        auto bank = std::make_shared<SampleBank>();
+        if (! sfz.empty() && loadSfz (sfz, *bank, err))
+        {
+            const auto& tp = tonePresets()[(size_t) tonePresetIndex ("Rock Lead")];
+            GuitarRigSettings rig; rig.engine = GuitarEngineKind::Samples; rig.guitar = tp.guitar;
+            sets.push_back ({ "Rock Lead (v3 samples)", tp.fx, rig, bank });
+        }
+    }
+    for (const auto& [name, fx, rig, bank] : sets)
     {
         SoloEngine e;
         e.setInstrument (InstrumentId::Guitar);
         e.publishFx (fx);
+        e.publishRig (rig);
+        e.publishSampleBank (bank);
         e.publishSequence (makePlaybackData (s, 0, true));
         e.prepare (48000, 256);
         std::vector<float> L (256), R (256);
@@ -314,6 +547,8 @@ int cmdBench()
                      blocks * blockUs / total);
     }
     std::printf ("Memoria: tamaño de SoloEngine %zu bytes + buffers (delay 4 s estéreo, reverb, chorus, cuerdas)\n", sizeof (SoloEngine));
+    std::printf ("Latencia declarada: v2 0 muestras; v3 ampli 2x %d muestras; 4x %d muestras (a cualquier frecuencia de muestreo)\n",
+                 Halfband2x::latencyAtLowRate(), Halfband2x::latencyAtLowRate() * 3 / 2);
     std::printf ("Pico de memoria residente del proceso: %ld KB (antes de la prueba: %ld KB)\n", peakRssKb(), rss0);
     return 0;
 }
@@ -358,6 +593,8 @@ int main (int argc, char** argv)
     if (argc >= 4 && std::strcmp (argv[1], "hum") == 0) return cmdHum (argc, argv);
     if (argc >= 3 && std::strcmp (argv[1], "synthvoice") == 0) return cmdSynthVoice (argv[2]);
     if (argc >= 2 && std::strcmp (argv[1], "bench") == 0) return cmdBench();
+    if (argc >= 3 && std::strcmp (argv[1], "tone-ab") == 0) return cmdToneAb (argc, argv);
+    if (argc >= 3 && std::strcmp (argv[1], "makebank") == 0) return cmdMakeBank (argv[2]);
     if (argc >= 2 && std::strcmp (argv[1], "calibrate") == 0) return cmdCalibrate();
     if (argc >= 3 && std::strcmp (argv[1], "command") == 0) return cmdCommand (argv[2]);
     if (argc >= 3 && std::strcmp (argv[1], "examples") == 0)
@@ -371,6 +608,6 @@ int main (int argc, char** argv)
                  "                   [--plan \"P2 D2 T2 C1 R1\"] [--fx \"Emotional Lead\"|none] [--seed 1] [--out solo]\n"
                  "  solo_cli demos <carpeta>\n  solo_cli examples <carpeta>\n"
                  "  solo_cli hum <voz.wav> <carpeta> [--key Am] [--prog \"Am F C G\"] [--bpm 100] [--bars 8]\n"
-                 "  solo_cli synthvoice <salida.wav>\n  solo_cli bench\n  solo_cli calibrate\n  solo_cli command \"<orden en español>\"\n");
+                 "  solo_cli synthvoice <salida.wav>\n  solo_cli bench\n  solo_cli tone-ab <carpeta> [--expression 65]   demos v2/v3 con el mismo MIDI a -18 LUFS\n  solo_cli makebank <carpeta>                    banco SFZ sintético de prueba\n  solo_cli calibrate\n  solo_cli command \"<orden en español>\"\n");
     return 1;
 }
