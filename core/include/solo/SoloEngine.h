@@ -66,11 +66,16 @@ public:
     {
         int eventCount = 0;   // eventos MIDI de este bloque (ver events())
         double bpm = 120.0;   // tempo efectivo
+        bool resynced = false;      // el reproductor arrancó o detectó un salto/loop (cerró notas)
+        double deviationPpq = 0.0;  // host - reloj interno (0 si no hay tramo continuo)
+        bool transportPlaying = false; // transporte efectivo (host o reloj interno) en marcha
     };
     // Escribe el audio (estéreo; si right == left, mono) sustituyendo el contenido del buffer.
     BlockResult process (float* left, float* right, int numSamples, const TransportState& host);
     const TimedEvent* events() const { return eventScratch.data(); }
     int activeVoiceCount() const { return instrument.activeVoiceCount(); }
+    uint32_t resyncCount() const { return player.resyncCount(); }
+    uint32_t nudgeCount() const { return player.nudgeCount(); }
 
 private:
     InstrumentEngine instrument;

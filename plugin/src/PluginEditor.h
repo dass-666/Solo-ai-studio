@@ -98,6 +98,7 @@ private:
     juce::ToggleButton keepMotifsToggle { "Mantener motivos" }, pitchBendToggle { "MIDI con pitch bend" };
     juce::ComboBox presetBox, rateBox, fmtBox;
     juce::TextButton savePresetButton { "Guardar" }, loadPresetButton { "Cargar" };
+    juce::TextButton transportDiagButton { juce::String::fromUTF8 ("Diagnóstico transporte") };
     juce::TextButton zoomInButton { "+" }, zoomOutButton { "-" }, fitButton { "Ajustar" };
 
     PianoRoll pianoRoll;

@@ -54,13 +54,18 @@ void SoloPlayer::reset()
 {
     active.fill (0);
     wasPlaying = false;
+    haveSampleTime = false;
     lastData = nullptr;
+    resyncs = nudges = 0;
+    lastResynced = false;
+    lastDeviation = 0.0;
 }
 
 int SoloPlayer::process (const TransportState& t, double sampleRate, int numSamples, const PlaybackData* data,
                          TimedEvent* out, int maxOut)
 {
     int n = 0;
+    lastResynced = false;
     if (data != lastData)
     {
         // Nueva secuencia publicada: cerrar las notas de la anterior.
@@ -72,23 +77,60 @@ int SoloPlayer::process (const TransportState& t, double sampleRate, int numSamp
     {
         n += flush (out + n, maxOut - n);
         wasPlaying = false;
+        haveSampleTime = false;
         return n;
     }
 
     const double ppqPerSample = t.bpm / 60.0 / sampleRate;
-    const double p0 = t.ppqPosition;
-    const double p1 = p0 + numSamples * ppqPerSample;
-    // Salto/loop/reubicación del host: si la posición no continúa la del bloque anterior.
-    const double tolerance = std::max (1.0e-3, ppqPerSample * 4.0);
-    if (! wasPlaying || std::abs (p0 - expectedPpq) > tolerance)
+    // ¿Continúa este bloque al anterior?
+    bool continuous = wasPlaying;
+    if (continuous)
+    {
+        if (t.timeInSamplesValid && haveSampleTime)
+            continuous = t.timeInSamples == lastSampleTime + lastNumSamples;
+        // Aunque las muestras sigan, la posición musical debe seguir también (loop con contador de muestras
+        // continuo, salto de un host sin posición en muestras, etc.).
+        if (continuous) continuous = std::abs (t.ppqPosition - expectedPpq) <= kJumpTolerancePpq;
+    }
+    double p0;
+    if (! continuous)
+    {
         n += flush (out + n, maxOut - n);
+        p0 = t.ppqPosition;
+        ++resyncs;
+        lastResynced = true;
+        lastDeviation = 0.0;
+    }
+    else
+    {
+        // Reloj interno. Dentro de la banda muerta (cuantización o jitter del host) no se corrige nada; fuera de
+        // ella la deriva se corrige poco a poco, como mucho kMaxNudgeSamples por bloque.
+        const double dev = t.ppqPosition - expectedPpq;
+        lastDeviation = dev;
+        p0 = expectedPpq;
+        if (std::abs (dev) > kDeadbandPpq)
+        {
+            const double maxNudge = ppqPerSample * kMaxNudgeSamples;
+            const double excess = dev > 0 ? dev - kDeadbandPpq : dev + kDeadbandPpq;
+            p0 += std::clamp (excess, -maxNudge, maxNudge);
+            ++nudges;
+        }
+    }
+    const double p1 = p0 + numSamples * ppqPerSample;
     wasPlaying = true;
     expectedPpq = p1;
+    haveSampleTime = t.timeInSamplesValid;
+    lastSampleTime = t.timeInSamples;
+    lastNumSamples = numSamples;
 
     const double ticksPerSample = ppqPerSample * kPPQ;
     const double t0 = p0 * kPPQ - (double) data->startOffsetTicks;
     const double t1 = p1 * kPPQ - (double) data->startOffsetTicks;
     const int64_t L = data->lengthTicks;
+    // En un tramo continuo se sigue exactamente donde se dejó: si el reloj se corrigió hacia atrás no se repiten
+    // eventos ya emitidos, y si se corrigió hacia delante no se pierde ninguno (salen con offset 0).
+    const double segFrom = continuous ? lastEmittedTick : t0;
+    lastEmittedTick = t1;
     if (t1 <= 0.0 || L <= 0) return n;
 
     const auto& ev = data->events;
@@ -130,7 +172,7 @@ int SoloPlayer::process (const TransportState& t, double sampleRate, int numSamp
         }
     };
 
-    const double start = std::max (0.0, t0);
+    const double start = std::max (0.0, segFrom);
     if (! data->loop)
     {
         if (start <= (double) L) emitRange (0, start, std::min (t1, (double) L), t1 >= (double) L);

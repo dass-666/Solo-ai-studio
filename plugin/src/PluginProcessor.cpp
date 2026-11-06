@@ -61,6 +61,7 @@ void SoloAIStudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             if (bpm) host.bpm = *bpm;
             if (ppq) host.ppqPosition = *ppq;
             host.valid = bpm.hasValue() && ppq.hasValue() && *bpm > 0.0;
+            if (const auto ts = pos->getTimeInSamples()) { host.timeInSamplesValid = true; host.timeInSamples = *ts; }
             if (auto ts = pos->getTimeSignature()) { host.tsNumerator = ts->numerator; host.tsDenominator = ts->denominator; }
         }
     }
@@ -69,6 +70,8 @@ void SoloAIStudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     hostBpm.store (host.bpm);
     hostTsNum.store (host.tsNumerator);
     hostTsDen.store (host.tsDenominator);
+    hostHasSampleTime.store (host.timeInSamplesValid);
+    lastBlockSize.store (n);
 
     audio.setOutputGain (outputGain->get());
     float* left = buffer.getNumChannels() > 0 ? buffer.getWritePointer (0) : nullptr;
@@ -77,6 +80,18 @@ void SoloAIStudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // El motor escribe el bloque completo (sustituye el contenido). En mono suma L+R con su propia ganancia.
     const auto r = audio.process (left, right, n, host);
     for (int c = 2; c < buffer.getNumChannels(); ++c) buffer.clear (c, 0, n);
+
+    // Registro de transporte (sin reservas: anillo fijo).
+    {
+        const uint32_t i = transportLogPos.fetch_add (1) % (uint32_t) kTransportLog;
+        auto& rec = transportLog[i];
+        rec.hostMs = juce::Time::getMillisecondCounterHiRes();
+        rec.bpm = host.bpm; rec.ppq = host.ppqPosition; rec.deviationPpq = r.deviationPpq;
+        rec.timeInSamples = host.timeInSamplesValid ? host.timeInSamples : -1;
+        rec.numSamples = n; rec.events = r.eventCount;
+        rec.valid = host.valid; rec.playing = host.playing; rec.resynced = r.resynced; rec.effectivePlaying = r.transportPlaying;
+        if (r.resynced) resyncsSeen.fetch_add (1);
+    }
 
     if (midiOutEnabled.load())
     {
@@ -397,7 +412,31 @@ void SoloAIStudioProcessor::stopPreview() { audio.requestPreviewStop(); }
 
 SoloAIStudioProcessor::HostInfo SoloAIStudioProcessor::getHostInfo() const
 {
-    return { hostValid.load(), hostPlaying.load(), hostBpm.load(), hostTsNum.load(), hostTsDen.load() };
+    return { hostValid.load(), hostPlaying.load(), hostBpm.load(), hostTsNum.load(), hostTsDen.load(), resyncsSeen.load(),
+             hostHasSampleTime.load() };
+}
+
+juce::String SoloAIStudioProcessor::transportDiagnosticText() const
+{
+    // Copia del anillo (lectura sin bloqueo: algún registro puede estar a medio escribir; es un diagnóstico).
+    const uint32_t end = transportLogPos.load();
+    const uint32_t count = juce::jmin ((uint32_t) kTransportLog, end);
+    juce::String t;
+    t << "Solo AI Studio - diagnostico de transporte" << juce::newLine;
+    t << "frecuencia " << currentSampleRate << " Hz, ultimo bloque " << lastBlockSize.load() << " muestras, "
+      << "posicion en muestras del host: " << (hostHasSampleTime.load() ? "si" : "no")
+      << ", resincronizaciones totales: " << (int) resyncsSeen.load() << juce::newLine;
+    t << "Columnas: ms | valido | play(host) | play(efectivo) | bpm | ppq | muestras | n | eventos | resync | desviacion(ppq)" << juce::newLine;
+    const double t0 = count > 0 ? transportLog[(end - count) % (uint32_t) kTransportLog].hostMs : 0.0;
+    for (uint32_t k = 0; k < count; ++k)
+    {
+        const auto& r = transportLog[(end - count + k) % (uint32_t) kTransportLog];
+        t << juce::String (r.hostMs - t0, 2) << " | " << (r.valid ? 1 : 0) << " | " << (r.playing ? 1 : 0) << " | "
+          << (r.effectivePlaying ? 1 : 0) << " | " << juce::String (r.bpm, 3) << " | " << juce::String (r.ppq, 6) << " | "
+          << juce::String (r.timeInSamples) << " | " << r.numSamples << " | " << r.events << " | " << (r.resynced ? 1 : 0)
+          << " | " << juce::String (r.deviationPpq, 6) << juce::newLine;
+    }
+    return t;
 }
 
 juce::String SoloAIStudioProcessor::getLastStatus() const

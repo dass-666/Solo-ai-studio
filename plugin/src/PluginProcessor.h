@@ -9,6 +9,7 @@
 #include "solo/SoloEngine.h"
 #include "solo/StateManager.h"
 
+#include <array>
 #include <atomic>
 #include <functional>
 
@@ -89,8 +90,11 @@ public:
     void stopPreview();
     bool isPreviewing() const { return audio.isPreviewing(); }
 
-    struct HostInfo { bool valid; bool playing; double bpm; int tsNum; int tsDen; };
+    struct HostInfo { bool valid; bool playing; double bpm; int tsNum; int tsDen; uint32_t resyncs; bool hasSampleTime; };
     HostInfo getHostInfo() const;
+    // Diagnóstico de transporte: últimos bloques (posición declarada por el host, eventos, resincronizaciones).
+    // Lo escribe el hilo de audio en un anillo fijo y lo lee la interfaz para guardarlo en un fichero de texto.
+    juce::String transportDiagnosticText() const;
     double effectiveBpm() const;
     int64_t playheadTick() const { return audio.playheadTick(); }
     juce::String getLastStatus() const;
@@ -117,6 +121,20 @@ private:
     std::atomic<int> hostTsNum { 4 }, hostTsDen { 4 };
     std::atomic<double> tailSeconds { 0.5 };
     double currentSampleRate = 48000.0;
+
+    struct TransportRecord
+    {
+        double hostMs = 0, bpm = 0, ppq = 0, deviationPpq = 0;
+        int64_t timeInSamples = -1;
+        int numSamples = 0, events = 0;
+        bool valid = false, playing = false, resynced = false, effectivePlaying = false;
+    };
+    static constexpr int kTransportLog = 2048;
+    std::array<TransportRecord, kTransportLog> transportLog {};
+    std::atomic<uint32_t> transportLogPos { 0 };
+    std::atomic<uint32_t> resyncsSeen { 0 };
+    std::atomic<bool> hostHasSampleTime { false };
+    std::atomic<int> lastBlockSize { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SoloAIStudioProcessor)
 };

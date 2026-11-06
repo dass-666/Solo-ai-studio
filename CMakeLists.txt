@@ -53,7 +53,7 @@ endif()
 
 if(SOLO_BUILD_TESTS)
     enable_testing()
-    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp)
+    add_executable(solo_tests tests/TestMain.cpp tests/TestComposerV2.cpp tests/TestAudioV2.cpp tests/TestVoice.cpp tests/TestProject.cpp tests/TestTransport.cpp)
     target_link_libraries(solo_tests PRIVATE solo_core)
     if(MSVC)
         target_compile_options(solo_tests PRIVATE /utf-8)

@@ -110,6 +110,9 @@ SoloEngine::BlockResult SoloEngine::process (float* left, float* right, int n, c
 
     count += player.process (t, sampleRate, n, data, eventScratch.data() + count, maxOut - count);
     res.eventCount = count;
+    res.resynced = player.lastBlockResynced();
+    res.deviationPpq = player.lastDeviationPpq();
+    res.transportPlaying = t.valid && t.playing;
 
     // Posición local del solo (para interfaz y automatización)
     double localTick = -1.0;
@@ -193,6 +196,8 @@ EngineRenderResult renderWithEngine (const Sequence& seq, const EngineRenderOpti
     {
         const int n = (int) std::min<int64_t> (block, total - pos);
         t.ppqPosition = (double) pos * bpm / 60.0 / sr;
+        t.timeInSamplesValid = true;
+        t.timeInSamples = pos;
         const auto br = engine->process (r.left.data() + pos, r.right.data() + pos, n, t);
         for (int i = 0; i < br.eventCount; ++i)
             (engine->events()[i].type == EventType::NoteOn ? r.noteOns : r.noteOffs)++;

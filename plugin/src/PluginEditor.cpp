@@ -250,6 +250,13 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
     for (auto* cb : { &rateBox, &fmtBox }) cb->onChange = [this] { if (! updating) pushSettings(); };
     savePresetButton.onClick = [this] { onSavePreset(); };
     loadPresetButton.onClick = [this] { onLoadPreset(); };
+    transportDiagButton.setTooltip (U ("Guarda en Documentos/Solo AI Studio un registro de los últimos bloques: posición que declara el DAW, "
+                                       "eventos y resincronizaciones. Útil para diagnosticar problemas de sincronía."));
+    transportDiagButton.onClick = [this] {
+        const auto f = defaultExportFolder().getChildFile ("diagnostico-transporte.txt");
+        const bool ok = f.replaceWithText (proc.transportDiagnosticText());
+        status (ok ? U ("Diagnóstico guardado: ") + f.getFullPathName() : U ("No se pudo guardar el diagnóstico"), ! ok);
+    };
     zoomInButton.onClick = [this] { pianoRoll.zoomHorizontal (1.25f); };
     zoomOutButton.onClick = [this] { pianoRoll.zoomHorizontal (0.8f); };
     fitButton.onClick = [this] { pianoRoll.fitToContent(); };
@@ -277,7 +284,7 @@ SoloAIStudioEditor::SoloAIStudioEditor (SoloAIStudioProcessor& p)
              &seedLabel, &seedEditor, &lockSeedToggle, &complexityLabel, &complexitySlider, &bpmLabel, &bpmSlider, &hostTempoToggle,
              &syncToggle, &startBarLabel, &startBarSlider, &loopToggle, &velocityLabel, &velocitySlider, &presetLabel, &presetBox,
              &savePresetButton, &loadPresetButton, &rateBox, &fmtBox, &performerLabel, &performerBox, &engineBox, &keepMotifsToggle,
-             &pitchBendToggle })
+             &pitchBendToggle, &transportDiagButton })
         genTab.addAndMakeVisible (c);
     genTab.layout = [this] { layoutGeneration(); };
     notesPanel = std::make_unique<NotesPanel> (panelCtx);
@@ -566,7 +573,8 @@ void SoloAIStudioEditor::timerCallback()
     const auto s = proc.getSettings();
     juce::String t;
     if (h.valid)
-        t << "DAW: " << juce::String (h.bpm, 1) << " BPM " << h.tsNum << "/" << h.tsDen << (h.playing ? U ("  ▶") : U ("  ■"));
+        t << "DAW: " << juce::String (h.bpm, 1) << " BPM " << h.tsNum << "/" << h.tsDen << (h.playing ? U ("  ▶") : U ("  ■"))
+          << (h.hasSampleTime ? "" : U (" (sin pos. en muestras)")) << U ("  resync ") << (int) h.resyncs;
     else
         t << U ("DAW: sin tempo");
     t << U ("   ·   Solo a ") << juce::String (proc.effectiveBpm(), 1) << " BPM";
@@ -703,7 +711,7 @@ void SoloAIStudioEditor::layoutGeneration()
     place (r4, presetLabel, 46);
     place (r4, presetBox, 230);
     place (r4, savePresetButton, 66); place (r4, loadPresetButton, 62);
-    place (r4, rateBox, 100); place (r4, fmtBox, 100);
+    place (r4, rateBox, 100); place (r4, fmtBox, 100); place (r4, transportDiagButton, 160);
 }
 
 bool SoloAIStudioEditor::keyPressed (const juce::KeyPress& k)
